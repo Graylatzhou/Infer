@@ -1,0 +1,6 @@
+# ninja log v5
+0	324	1747975441769399480	CMakeFiles/infer.dir/src/operators/matmul/matmul.cu.o	479b458f69f44068
+0	19	1747975663207216347	libinfer.a	d1c98e1d5136a8d4
+1	198	1747975663385775084	CMakeFiles/infer_app.dir/src/main.cpp.o	ebc5afc6b79ba1b5
+1126	1184	1747977900070154961	infer_app	e48f1ceec819f442
+1	1126	1747977900011717237	CMakeFiles/infer_app.dir/src/main.cu.o	310e1031cc40f972
