@@ -85,6 +85,14 @@ public:
         return nullptr;
     }
 
+    const T* data_ptr() const {
+        if (device_ == Device::CPU) {
+            return data_->data();
+        } else {
+            return gpu_data_.get();
+        }
+    }
+
     void fill(T value) {
         if (device_ == Device::CPU) {
             std::fill(data_->begin(), data_->end(), value);
@@ -162,6 +170,14 @@ public:
 
     const std::string& getTag() const {
         return tag;
+    }
+
+    size_t dim() const {
+        return shape_.size();
+    }
+
+    const cudaStream_t& getStream() const {
+        return stream_;
     }
 
 private:
