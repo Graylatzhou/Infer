@@ -56,6 +56,8 @@ void initialize_data(half* A, half* B, int M, int N, int K, bool is_device = tru
 }
 
 int main() {
+    std::cout << "Checking registered operators..." << std::endl;
+    infer::OperatorRegistry::getInstance().printRegisteredOperators();
     constexpr int N = 1024;
     constexpr int M = 1024;
     constexpr int K = 1024;

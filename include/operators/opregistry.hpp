@@ -64,8 +64,29 @@ public:
                 result.push_back({type, name});
             }
         }
-        
+        for (const auto& [type, map] : fp16Registry_) {
+            for (const auto& [name, _] : map) {
+                result.push_back({type, name});
+            }
+        }
         return result;
+    }
+    void printRegisteredOperators() const {
+        std::cout << "=== Registered FP32 Operators ===" << std::endl;
+        for (const auto& [type, operators] : fp32Registry_) {
+            std::cout << "  Type " << static_cast<int>(type) << ":" << std::endl;
+            for (const auto& [name, _] : operators) {
+                std::cout << "    - " << name << std::endl;
+            }
+        }
+        
+        std::cout << "=== Registered FP16 Operators ===" << std::endl;
+        for (const auto& [type, operators] : fp16Registry_) {
+            std::cout << "  Type " << static_cast<int>(type) << ":" << std::endl;
+            for (const auto& [name, _] : operators) {
+                std::cout << "    - " << name << std::endl;
+            }
+        }
     }
 };
 

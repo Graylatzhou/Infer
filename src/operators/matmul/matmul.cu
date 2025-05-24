@@ -1,6 +1,21 @@
 #include "matmul.hpp"
 namespace infer {
 
+#define CP_ASYNC_COMMIT_GROUP() asm volatile("cp.async.commit_group;\n" ::)
+#define CP_ASYNC_WAIT_ALL() asm volatile("cp.async.wait_all;\n" ::)
+#define CP_ASYNC_WAIT_GROUP(n)                                                 \
+    asm volatile("cp.async.wait_group %0;\n" ::"n"(n))
+// ca(cache all, L1 + L2): support 4, 8, 16 bytes, cg(cache global, L2): only
+// support 16 bytes.
+#define CP_ASYNC_CA(dst, src, bytes)                                           \
+    asm volatile(                                                                \
+        "cp.async.ca.shared.global.L2::128B [%0], [%1], %2;\n" ::"r"(dst),       \
+        "l"(src), "n"(bytes))
+#define CP_ASYNC_CG(dst, src, bytes)                                           \
+    asm volatile(                                                                \
+        "cp.async.cg.shared.global.L2::128B [%0], [%1], %2;\n" ::"r"(dst),       \
+        "l"(src), "n"(bytes))
+
 #define LDST128BITS(value) (reinterpret_cast<float4 *>(&(value))[0])
 #define LDST32BITS(value) (reinterpret_cast<half2 *>(&(value))[0])
 
@@ -123,15 +138,157 @@ __global__ void gemm_mma_vectorized_kernel(const half *A, const half *B, half *C
     }
 }      
 
+
+template <int BM=128, int BN=128, int BK=16, bool BLOCK_SWIZZLE=false, int KStage=2>
+__global__ void gemm_mma_async_vectorized_kernel(const half *A, const half *B, half *C, int M, int N, int K) {
+  int bx = blockIdx.x;
+  int by = blockIdx.y;
+  __shared__ half smemA[KStage][BM][BK];
+  __shared__ half smemB[KStage][BK][BN];
+  __shared__ half smemC[BM][BN];
+  int warp_id = threadIdx.x / 32;
+  int warp_m = warp_id % 2;
+  int warp_n = warp_id / 2;
+  int lane_id = threadIdx.x % 32;
+  // load tileA smem idx calculation
+  // 128 * 16 layout
+  // 16 elements per row
+  int load_smem_a_row = threadIdx.x / 2;
+  int load_smem_a_col = (threadIdx.x & 1) << 3;
+  // load tileB smem idx calculation
+  // 16 * 128 layout
+  // 128 / 8 = 16 threads per row
+  int load_smem_b_row = threadIdx.x / 16;
+  int load_smem_b_col = (threadIdx.x & 15) << 3; // 0 - 15 * 8
+  int load_gmem_a_row = by * BM + load_smem_a_row;
+  int load_gmem_b_col = bx * BN + load_smem_b_col;
+
+  constexpr int sAoffset = BM * BK;
+  constexpr int sBoffset = BK * BN;
+
+  if (load_gmem_a_row >= M || load_gmem_b_col >= N) return;
+
+  uint32_t smemA_base_ptr = __cvta_generic_to_shared(&smemA);
+  uint32_t smemB_base_ptr = __cvta_generic_to_shared(&smemB);
+
+  uint32_t RC[4][4][2];
+  #pragma unroll
+  for (int i = 0; i < 4; i++) {
+    for (int j = 0; j < 4; j++) {
+      RC[i][j][0] = 0;
+      RC[i][j][1] = 0;
+    }
+  }
+  // pre-fetch
+  #pragma unroll
+  for (int turn = 0; turn < KStage - 1; turn++) {
+    int load_gmem_a_col = turn * BK + load_smem_a_col;
+    int load_gmem_b_row = turn * BK + load_smem_b_row;
+    int load_gmem_a_addr = load_gmem_a_row * K + load_gmem_a_col;
+    int load_gmem_b_addr = load_gmem_b_row * N + load_gmem_b_col;
+    uint32_t smemA_addr = smemA_base_ptr + (turn * sAoffset + load_smem_a_row * BK + load_smem_a_col) * sizeof(half);
+    CP_ASYNC_CG(smemA_addr, &A[load_gmem_a_addr], 16); //bytes, CG bypass L1
+    uint32_t smemB_addr = smemB_base_ptr + (turn * sBoffset + load_smem_b_row * BN + load_smem_b_col) * sizeof(half);
+    CP_ASYNC_CG(smemB_addr, &B[load_gmem_b_addr], 16); //bytes, CG bypass L1
+    CP_ASYNC_COMMIT_GROUP();
+  }
+  CP_ASYNC_WAIT_GROUP(KStage - 2); // 等待到还剩KStage - 2个操作未完成
+  __syncthreads();
+  for (int bk = KStage - 1; bk < (K + BK - 1) / BK; bk++) {
+    // load tileA
+    int smem_select_next = bk % KStage; // load
+    int smem_select = (bk + 1) % KStage; // calculate
+    int load_gmem_a_col = bk * BK + load_smem_a_col;
+    int load_gmem_b_row = bk * BK + load_smem_b_row;
+    int load_gmem_a_addr = load_gmem_a_row * K + load_gmem_a_col;
+    int load_gmem_b_addr = load_gmem_b_row * N + load_gmem_b_col;
+    uint32_t smemA_addr = smemA_base_ptr + (smem_select_next * sAoffset + load_smem_a_row * BK + load_smem_a_col) * sizeof(half);
+    uint32_t smemB_addr = smemB_base_ptr + (smem_select_next * sBoffset + load_smem_b_row * BN + load_smem_b_col) * sizeof(half);
+    CP_ASYNC_CG(smemA_addr, &A[load_gmem_a_addr], 16); //bytes, CG bypass L1
+    CP_ASYNC_CG(smemB_addr, &B[load_gmem_b_addr], 16); //bytes, CG bypass L1
+    CP_ASYNC_COMMIT_GROUP();
+    uint32_t RA[4][4];
+    uint32_t RB[4][2];
+    // ldmatrixA
+    // m 方向2个warp 负责 128行加载 -> 一个warp64行 64 / 4
+    // WARP_M = 4 即为RC在M方向的重复次数
+    #pragma unroll  
+    for (int i = 0; i < 4; i++) { // warp_m * MMA_M * WARP_M
+      int lane_load_smem_a_row = warp_m * 16 * 4 + i * 16 + lane_id % 16;
+      int lane_load_smem_a_col = (lane_id / 16) * 8;// 0-15 -> 0, 16-31 -> 8
+      uint32_t smemA_addr = __cvta_generic_to_shared(&smemA[smem_select][lane_load_smem_a_row][lane_load_smem_a_col]);
+      LDMATRIX_X4(RA[i][0], RA[i][1], RA[i][2], RA[i][3], smemA_addr);
+    }
+    // n 方向 4个warp，128列加载 -> 一个warp 32列加载，其中一个warp一次加载8列
+    // 所以一个warp要加载4次
+    #pragma unroll
+    for (int i = 0; i < 4; i++) {
+      int lane_load_smem_b_row = lane_id % 16; //每个线程提供一行smem的首地址 
+      int lane_load_smem_b_col = warp_n * 32 + i * 8; 
+      uint32_t smemB_addr = __cvta_generic_to_shared(&smemB[smem_select][lane_load_smem_b_row][lane_load_smem_b_col]);
+      LDMATRIX_X2_T(RB[i][0], RB[i][1], smemB_addr);
+    }
+    #pragma unroll
+    for (int i = 0; i < 4; i++) {
+      for (int j = 0; j < 4; j++) {
+        HMMA16816(RC[i][j][0], RC[i][j][1], RA[i][0], RA[i][1], RA[i][2], RA[i][3], RB[j][0], RB[j][1], RC[i][j][0], RC[i][j][1]);
+      }
+    }
+    CP_ASYNC_WAIT_GROUP(KStage - 2);
+    __syncthreads();
+  }
+  //calculate buffer idx 1
+  uint32_t RA[4][4];
+  uint32_t RB[4][2];
+  #pragma unroll  
+  for (int i = 0; i < 4; i++) { // warp_m * MMA_M * WARP_M
+    int lane_load_smem_a_row = warp_m * 16 * 4 + i * 16 + lane_id % 16;
+    int lane_load_smem_a_col = (lane_id / 16) * 8;// 0-15 -> 0, 16-31 -> 8
+    uint32_t smemA_addr = __cvta_generic_to_shared(&smemA[1][lane_load_smem_a_row][lane_load_smem_a_col]);
+    LDMATRIX_X4(RA[i][0], RA[i][1], RA[i][2], RA[i][3], smemA_addr);
+  }
+  #pragma unroll
+  for (int i = 0; i < 4; i++) {
+    int lane_load_smem_b_row = lane_id % 16; //每个线程提供一行smem的首地址 
+    int lane_load_smem_b_col = warp_n * 32 + i * 8; 
+    uint32_t smemB_addr = __cvta_generic_to_shared(&smemB[1][lane_load_smem_b_row][lane_load_smem_b_col]);
+    LDMATRIX_X2_T(RB[i][0], RB[i][1], smemB_addr);
+  }
+  #pragma unroll
+  for (int i = 0; i < 4; i++) {
+    for (int j = 0; j < 4; j++) {
+      HMMA16816(RC[i][j][0], RC[i][j][1], RA[i][0], RA[i][1], RA[i][2], RA[i][3], RB[j][0], RB[j][1], RC[i][j][0], RC[i][j][1]);
+    }
+  }
+  // store tileC
+  // tileC 128 * 128
+  #pragma unroll
+  for (int i = 0; i < 4; i++) {
+    #pragma unroll
+    for (int j = 0; j < 4; j++) {
+      // lane_id / 4 -> lane_id 0-32 -> 0-8
+      int store_smem_c_row = warp_m * 64 + i * 16 + lane_id / 4; //分为两部分存储，因为RC[2]中的两个元素相隔8行
+      int store_smem_c_col = warp_n * 32 + j * 8 + (lane_id % 4) * 2;  // 32bits
+      LDST32BITS(smemC[store_smem_c_row + 0][store_smem_c_col]) = LDST32BITS(RC[i][j][0]);
+      LDST32BITS(smemC[store_smem_c_row + 8][store_smem_c_col]) = LDST32BITS(RC[i][j][1]);
+    }
+  }
+  for (int tid = threadIdx.x; tid < BM * BN; tid += blockDim.x) {
+    int store_smem_c_row = tid / BN;
+    int store_smem_c_col = tid % BN;
+    int store_gmem_c_row = by * BM + store_smem_c_row;
+    int store_gmem_c_col = bx * BN + store_smem_c_col;
+    if (store_gmem_c_row < M && store_gmem_c_col < N) {
+      C[store_gmem_c_row * N + store_gmem_c_col] += smemC[store_smem_c_row][store_smem_c_col];
+    }
+  }
+}
+
+
 __global__ void print(const half* data) {
     printf("half data: %f\n", __half2float(data[0]));
     printf("half data: %f\n", __half2float(data[1]));
 }
-template <>
-MatMulOperator<half>::MatMulOperator() : Operator<half>() {
-    cublasCreate(&handle_);
-}
-
 template <>
 void MatMulOperator<half>::forward(std::vector<const Tensor<half>*> input, Tensor<half>* output) {
 
@@ -149,12 +306,13 @@ void MatMulOperator<half>::forward(std::vector<const Tensor<half>*> input, Tenso
         A->data_ptr(), B->data_ptr(), output->data_ptr(), m, n, k);
     
 }
-
-template <>
-MatMulOperator<float>::MatMulOperator() : Operator<float>() {
+template <typename T>
+MatMulOperator<T>::MatMulOperator() {
+    // 初始化 cuBLAS 句柄
     cublasCreate(&handle_);
 }
 
+// 添加在已有的half实现之后
 template <>
 void MatMulOperator<float>::forward(std::vector<const Tensor<float>*> input, Tensor<float>* output) {
     auto A = input[0];
@@ -163,59 +321,31 @@ void MatMulOperator<float>::forward(std::vector<const Tensor<float>*> input, Ten
         throw std::runtime_error("Both input tensors must be 2D matrices.");
     }
     
-    cublasSetStream(handle_, A->getStream());
-    
-    // 基本参数
+    // 使用cuBLAS实现float版本的矩阵乘法
     int m = A->shape()[0];
     int n = B->shape()[1];
     int k = A->shape()[1];
-    cublasOperation_t transA = transposeA_ ? CUBLAS_OP_T : CUBLAS_OP_N;
-    cublasOperation_t transB = transposeB_ ? CUBLAS_OP_T : CUBLAS_OP_N;
     
-    cudaDataType_t input_type, output_type, compute_type;
-    void *alpha_ptr, *beta_ptr;
-    float alpha_f = 1.0f, beta_f = 0.0f;
-
-    input_type = CUDA_R_32F;
-    output_type = CUDA_R_32F;
-    compute_type = CUDA_R_32F;
-    alpha_ptr = &alpha_f;
-    beta_ptr = &beta_f;
-
-    // 使用cublasGemmEx统一处理不同精度
-    cublasStatus_t status = cublasGemmEx(
+    float alpha = 1.0f;
+    float beta = 0.0f;
+    
+    // 注意cublas使用列主序，而我们的数据是行主序
+    // 所以我们计算 B^T * A^T = (A * B)^T
+    cublasStatus_t status = cublasSgemm(
         handle_,
-        transB,                       // 交换B和A的转置标志
-        transA,                     
-        m, n, k,                      // 交换m和n
-        alpha_ptr,
-        A->data_ptr(),                 // 交换A和B
-        input_type,
-        transposeA_ ? k : m,     
-        B->data_ptr(),
-        input_type,
-        transposeB_ ? n : k,          
-        beta_ptr,
-        output->data_ptr(),
-        output_type,
-        m,                         
-        compute_type,
-        CUBLAS_GEMM_DEFAULT
+        CUBLAS_OP_N, CUBLAS_OP_N,
+        n, m, k,
+        &alpha,
+        B->data_ptr(), n,
+        A->data_ptr(), k,
+        &beta,
+        output->data_ptr(), n
     );
-
+    
     if (status != CUBLAS_STATUS_SUCCESS) {
-        const char* error_msg;
-        switch (status) {
-            case CUBLAS_STATUS_NOT_INITIALIZED: error_msg = "CUBLAS not initialized"; break;
-            case CUBLAS_STATUS_INVALID_VALUE: error_msg = "Invalid value"; break;
-            case CUBLAS_STATUS_ARCH_MISMATCH: error_msg = "Architecture mismatch"; break;
-            case CUBLAS_STATUS_EXECUTION_FAILED: error_msg = "Execution failed"; break;
-            default: error_msg = "Unknown error"; break;
-        }
-        throw std::runtime_error("cublasGemmEx failed: " + std::string(error_msg));
+        throw std::runtime_error("cuBLAS SGEMM failed: " + std::to_string(status));
     }
 }
 
-REGISTER_OPERATOR(OperatorType::MATMUL, MatMul, MatMulOperator)
-
 }
+

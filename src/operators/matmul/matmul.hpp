@@ -23,5 +23,5 @@ private:
     bool transposeB_ = false;
     cublasHandle_t handle_ = nullptr;
 };
-
+REGISTER_OPERATOR(infer::OperatorType::MATMUL, MatMul, infer::MatMulOperator)
 } // namespace infer
