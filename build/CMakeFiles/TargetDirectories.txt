@@ -1,4 +1,0 @@
-/home/zzw/Cute-Learning/Infer/build/CMakeFiles/infer.dir
-/home/zzw/Cute-Learning/Infer/build/CMakeFiles/infer_app.dir
-/home/zzw/Cute-Learning/Infer/build/CMakeFiles/edit_cache.dir
-/home/zzw/Cute-Learning/Infer/build/CMakeFiles/rebuild_cache.dir
