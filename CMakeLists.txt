@@ -33,7 +33,7 @@ message(STATUS "CUDA version: ${CUDA_VERSION}")
 message(STATUS "CUDA libraries: ${CUDA_LIBRARIES}")
 message(STATUS "cuBLAS library: ${CUBLAS_LIBRARY}")
 
-# 包含头文件目录
+
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CUDA_INCLUDE_DIRS}

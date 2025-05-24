@@ -18,7 +18,7 @@ public:
     // 构造指定形状的张量
     // tag分为weight和temporary两种
     Tensor(const std::vector<size_t>& shape, Device device, const std::string& tag = "", cudaStream_t stream = nullptr)
-     : shape_(shape), device_(device), offset_(0), tag(tag), stream_(stream) {
+     : shape_(shape), device_(device), tag(tag), offset_(0), stream_(stream) {
         stride_.resize(shape.size());
         size_t total_size = 1;
         for (int i = shape.size() - 1; i >= 0; --i) {
@@ -49,29 +49,6 @@ public:
         }
     }
 
-    Tensor(const Tensor<T>& other)
-     : shape_(other.shape_), stride_(other.stride_), device_(other.device_), tag(other.tag), offset_(other.offset_), total_size_(other.total_size_) {
-        if (device_ == Device::CPU) {
-            data_ = std::make_shared<std::vector<T>>(total_size);
-            gpu_data_ = nullptr;
-        } else if (device_ == Device::CUDA) {
-            data_ = nullptr;
-            T* gpu_ptr = nullptr;
-            if (tag == "weight") {
-                gpu_ptr = static_cast<T*>(CudaMemoryPoolManager::getInstance().getWeightPool().allocate(total_size * sizeof(T), stream_));
-            } else {
-                gpu_ptr = static_cast<T*>(CudaMemoryPoolManager::getInstance().getTemporaryPool().allocate(total_size * sizeof(T), stream_));
-            }
-            gpu_data_ = std::shared_ptr<T>(gpu_ptr, [this](T* ptr) {
-                if (this->tag == "weight") {
-                    CudaMemoryPoolManager::getInstance().getWeightPool().free(ptr, stream_);
-                } else {
-                    CudaMemoryPoolManager::getInstance().getTemporaryPool().free(ptr, stream_);
-                }
-            }); 
-        }
-    }
-
     ~Tensor() {
 
     }
@@ -97,7 +74,12 @@ public:
         if (device_ == Device::CPU) {
             std::fill(data_->begin(), data_->end(), value);
         } else if (device_ == Device::CUDA) {
-            checkCudaError(cudaMemsetAsync(gpu_data_.get(), value, total_size_ * sizeof(T), stream_));
+            std::vector<T> host_data(total_size_, value);
+            if (tag == "weight") {
+                CudaMemoryPoolManager::getInstance().getWeightPool().copyAsync(gpu_data_.get(), host_data.data(), total_size_ * sizeof(T), cudaMemcpyHostToDevice, stream_);
+            } else {
+                CudaMemoryPoolManager::getInstance().getTemporaryPool().copyAsync(gpu_data_.get(), host_data.data(), total_size_ * sizeof(T), cudaMemcpyHostToDevice, stream_);
+            }
         }
     }
 
@@ -115,17 +97,21 @@ public:
         if (newDevice == Device::CUDA && device_ == Device::CPU) {
             if (gpu_data_) {
                 if (tag == "weight") {
-                    CudaMemoryPoolManager::getInstance().getWeightPool().copyAsync(gpu_data_.get(), data_->data(), total_size_ * sizeof(T), cudaMemcpyHostToDevice);
+                    CudaMemoryPoolManager::getInstance().getWeightPool().copyAsync(
+                        gpu_data_.get(), data_->data(), 
+                        total_size_ * sizeof(T), cudaMemcpyHostToDevice, stream_); // 添加stream_
                 } else {
-                    CudaMemoryPoolManager::getInstance().getTemporaryPool().copyAsync(gpu_data_.get(), data_->data(), total_size_ * sizeof(T), cudaMemcpyHostToDevice);
+                    CudaMemoryPoolManager::getInstance().getTemporaryPool().copyAsync(
+                        gpu_data_.get(), data_->data(), 
+                        total_size_ * sizeof(T), cudaMemcpyHostToDevice, stream_); // 添加stream_
                 }
             }
         } else if (newDevice == Device::CPU && device_ == Device::CUDA) {
             if (data_) {
                 if (tag == "weight") {
-                    CudaMemoryPoolManager::getInstance().getWeightPool().copyAsync(data_->data(), gpu_data_.get(), total_size_ * sizeof(T), cudaMemcpyDeviceToHost);
+                    CudaMemoryPoolManager::getInstance().getWeightPool().copyAsync(data_->data(), gpu_data_.get(), total_size_ * sizeof(T), cudaMemcpyDeviceToHost, this->stream_);
                 } else {
-                    CudaMemoryPoolManager::getInstance().getTemporaryPool().copyAsync(data_->data(), gpu_data_.get(), total_size_ * sizeof(T), cudaMemcpyDeviceToHost);
+                    CudaMemoryPoolManager::getInstance().getTemporaryPool().copyAsync(data_->data(), gpu_data_.get(), total_size_ * sizeof(T), cudaMemcpyDeviceToHost, this->stream_);
                 }
             }
         }
@@ -184,9 +170,9 @@ private:
     Shape shape_;
     Stride stride_;
     Device device_;
-    std::string tag; //用于标记是否为权重
     std::shared_ptr<std::vector<T>> data_;
     std::shared_ptr<T> gpu_data_;
+    std::string tag; //用于标记是否为权重
     size_t offset_;
     size_t total_size_;
     cudaStream_t stream_;

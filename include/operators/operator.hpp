@@ -38,13 +38,11 @@ class Operator {
 public:
     virtual ~Operator() = default;
     
-    virtual std::vector<Tensor<T>> forward(const std::vector<Tensor<T>>& inputs, Tensor<T>& Output) = 0;
-    
     virtual OperatorType type() const = 0;
+
+    virtual void forward(std::vector<const Tensor<T>*> input0, Tensor<T>* output) = 0;
     
     virtual std::string name() const = 0;
-
-    virtual void setOpAttribute(const std::string& key, const std::string& value) = 0;
 
     DataType dataType() const {
         if constexpr (std::is_same_v<T, float>) {

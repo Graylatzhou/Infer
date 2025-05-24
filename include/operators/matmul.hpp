@@ -1,5 +1,5 @@
 #pragma once
-#include "operators/operator.hpp"  // 从include根目录引用
+#include "operators/operator.hpp"
 #include "tensor.hpp"
 #include "operators/opregistry.hpp"
 
@@ -10,7 +10,7 @@ class MatMulOperator : public Operator<T> {
 public:
     MatMulOperator();
     
-    void forward(std::vector<const Tensor<T>*> input0, Tensor<T>* output) override;
+    Tensor<T> forward(const Tensor<T>&input1, const Tensor<T>&input2, Tensor<T>& output);
     
     OperatorType type() const override { return OperatorType::MATMUL; }
     std::string name() const override { return "MatMul"; }
