@@ -2,6 +2,7 @@
 #include <vector>
 #include <memorypool.hpp>
 
+namespace infer {
 enum class Device {
     CPU,
     CUDA
@@ -183,4 +184,5 @@ private:
         }
     }
 
+};
 };

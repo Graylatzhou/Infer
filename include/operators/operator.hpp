@@ -17,7 +17,8 @@ enum class OperatorType {
     SILU,
     FLASHATTENTION,
     ADD_RMS_NORM,
-
+    MUL,
+    ADD,
 };
 
 // 支持的数据类型

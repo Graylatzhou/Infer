@@ -2,6 +2,7 @@
 #include "operators/operator.hpp"  // 从include根目录引用
 #include "tensor.hpp"
 #include "operators/opregistry.hpp"
+#include "cute/tensor.hpp"
 
 namespace infer {
     __global__ void print(half* data) ;
@@ -9,6 +10,7 @@ template <typename T>
 class MatMulOperator : public Operator<T> {
 public:
     MatMulOperator();
+    ~MatMulOperator();
     
     void forward(std::vector<const Tensor<T>*> input0, Tensor<T>* output) override;
     
@@ -22,6 +24,7 @@ private:
     bool transposeA_ = false;
     bool transposeB_ = false;
     cublasHandle_t handle_ = nullptr;
+    int algorithm_ = 1; 
 };
 REGISTER_OPERATOR(infer::OperatorType::MATMUL, MatMul, infer::MatMulOperator)
 } // namespace infer

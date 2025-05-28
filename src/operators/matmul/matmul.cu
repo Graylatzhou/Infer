@@ -1,4 +1,6 @@
 #include "matmul.hpp"
+#include <cute/tensor.hpp>
+
 namespace infer {
 
 #define CP_ASYNC_COMMIT_GROUP() asm volatile("cp.async.commit_group;\n" ::)
@@ -118,6 +120,7 @@ __global__ void gemm_mma_vectorized_kernel(const half *A, const half *B, half *C
     // tileC 128 * 128
     #pragma unroll
     for (int i = 0; i < 4; i++) {
+
     #pragma unroll
     for (int j = 0; j < 4; j++) {
         // lane_id / 4 -> lane_id 0-32 -> 0-8
@@ -284,27 +287,33 @@ __global__ void gemm_mma_async_vectorized_kernel(const half *A, const half *B, h
   }
 }
 
-
 __global__ void print(const half* data) {
     printf("half data: %f\n", __half2float(data[0]));
     printf("half data: %f\n", __half2float(data[1]));
 }
+
 template <>
 void MatMulOperator<half>::forward(std::vector<const Tensor<half>*> input, Tensor<half>* output) {
 
     auto A = input[0];
     auto B = input[1];
+
     if (A->dim() != 2 || B->dim() != 2) {
         throw std::runtime_error("Both input tensors must be 2D matrices.");
     }
-    int m = A->shape()[0];
-    int n = B->shape()[1];
-    int k = A->shape()[1];
-    dim3 block_x(256);
-    dim3 grid_x((n + 127) / 128, (m + 127) / 128);
-    gemm_mma_vectorized_kernel<<<grid_x, block_x, 0, A->getStream()>>>(
-        A->data_ptr(), B->data_ptr(), output->data_ptr(), m, n, k);
-    
+    int M = A->shape()[0];
+    int N = B->shape()[1];
+    int K = A->shape()[1];
+    static half alpha = 1.0;
+    static half beta = 0.0;
+    // dim3 block_x(256);
+    // dim3 grid_x((n + 127) / 128, (m + 127) / 128);
+    // gemm_mma_vectorized_kernel<<<grid_x, block_x, 0, A->getStream()>>>(
+    //     A->data_ptr(), B->data_ptr(), output->data_ptr(), m, n, k);
+
+    cublasGemmEx(handle_, CUBLAS_OP_N, CUBLAS_OP_N, N, M, K, &alpha, B->data_ptr(),
+      CUDA_R_16F, N, A->data_ptr(), CUDA_R_16F, K, &beta, output->data_ptr(), CUDA_R_16F, N,
+      CUBLAS_COMPUTE_16F, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
 }
 template <typename T>
 MatMulOperator<T>::MatMulOperator() {
@@ -312,7 +321,15 @@ MatMulOperator<T>::MatMulOperator() {
     cublasCreate(&handle_);
 }
 
-// 添加在已有的half实现之后
+template <typename T>
+MatMulOperator<T>::~MatMulOperator() {
+    if (handle_) {
+        cublasDestroy(handle_);
+        handle_ = nullptr;
+    }
+}
+
+
 template <>
 void MatMulOperator<float>::forward(std::vector<const Tensor<float>*> input, Tensor<float>* output) {
     auto A = input[0];
@@ -320,31 +337,22 @@ void MatMulOperator<float>::forward(std::vector<const Tensor<float>*> input, Ten
     if (A->dim() != 2 || B->dim() != 2) {
         throw std::runtime_error("Both input tensors must be 2D matrices.");
     }
-    
-    // 使用cuBLAS实现float版本的矩阵乘法
+
     int m = A->shape()[0];
     int n = B->shape()[1];
     int k = A->shape()[1];
     
-    float alpha = 1.0f;
-    float beta = 0.0f;
+    cublasSetStream(handle_, A->getStream());
+    cublasSetMathMode(handle_, CUBLAS_DEFAULT_MATH);
     
-    // 注意cublas使用列主序，而我们的数据是行主序
-    // 所以我们计算 B^T * A^T = (A * B)^T
-    cublasStatus_t status = cublasSgemm(
-        handle_,
-        CUBLAS_OP_N, CUBLAS_OP_N,
-        n, m, k,
-        &alpha,
-        B->data_ptr(), n,
-        A->data_ptr(), k,
-        &beta,
-        output->data_ptr(), n
-    );
+  
+    static float alpha = 1.0;
+    static float beta = 0.0;
+  
+    cublasGemmEx(handle_, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, &alpha, B->data_ptr(), CUDA_R_32F,
+                 n, A, CUDA_R_32F, k, &beta, output->data_ptr(), CUDA_R_32F, n, CUBLAS_COMPUTE_32F,
+                 CUBLAS_GEMM_DEFAULT);
     
-    if (status != CUBLAS_STATUS_SUCCESS) {
-        throw std::runtime_error("cuBLAS SGEMM failed: " + std::to_string(status));
-    }
 }
 
 }
