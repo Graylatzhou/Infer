@@ -28,50 +28,17 @@ enum class DataType {
     FLOAT16,  // FP16
 };
 
-// 前置声明模板基类
-template <typename T>
-class Operator;
 
-using OperatorFP32 = Operator<float>;
-using OperatorFP16 = Operator<half>;
-
-template <typename T>
 class Operator {
 public:
-    virtual void forward(std::vector<const Tensor<T>*> inputs, Tensor<T>* output) {
-        throw std::runtime_error("Not implemented for this operator");
-    }
-
-    virtual void forward(std::vector<const Tensor<T>*> inputs, Tensor<int32_t>* args, Tensor<T>* output) {
-        throw std::runtime_error("Not implemented for this operator");
-    }
     virtual ~Operator() = default;
     
     virtual OperatorType type() const = 0;
     
     virtual std::string name() const = 0;
 
-    DataType dataType() const {
-        if constexpr (std::is_same_v<T, float>) {
-            return DataType::FLOAT32;
-        } else if constexpr (std::is_same_v<T, half>) {
-            return DataType::FLOAT16;
-        }
-        return DataType::FLOAT32;  // 默认值
-    }
-    
-    // 转换为字符串的数据类型名称
-    std::string dataTypeName() const {
-        switch (dataType()) {
-            case DataType::FLOAT32: return "float32";
-            case DataType::FLOAT16: return "float16";
-            default: return "unknown";
-        }
-    }
 };
 
 // 定义算子的共享指针类型
-template <typename T>
-using OperatorPtr = std::shared_ptr<Operator<T>>;
 
 } 

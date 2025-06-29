@@ -10,13 +10,11 @@ __global__ void silu_kernel(T* output, const T* input, int total) {
 }
 namespace infer {
 template <typename T>
-void SiluOperator<T>::forward(std::vector<const Tensor<T>*> input, Tensor<T>* output) {
-    auto input1 = input[0]->data_ptr();
-    int size = input[0]->size();
-
+void SiluOperator<T>::forward(const Tensor<T>* input, Tensor<T>* output) {
+    int size = input->size();
     int blockSize = 256;
     int numBlocks = (size + blockSize - 1) / blockSize;
-    silu_kernel<T><<<numBlocks, blockSize>>>(output->data_ptr(), input1, size);
+    silu_kernel<T><<<numBlocks, blockSize>>>(output->data_ptr(), input->data_ptr(), size);
 }
 } // namespace infer
 

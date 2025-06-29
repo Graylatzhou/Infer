@@ -5,13 +5,14 @@
 
 namespace infer {
 template <typename T>   
-class SoftmaxOperator : public Operator<T> {
+class SoftmaxOperator : public Operator {
 public:
-    void forward(std::vector<const Tensor<T>*> input0, Tensor<T>* output);
+    void forward(Tensor<T>* input0, Tensor<T>* output, int32_t axis);
     
     OperatorType type() const override { return OperatorType::SOFTMAX; }
     std::string name() const override { return "SOFTMAX"; }
 };
 
-REGISTER_OPERATOR(infer::OperatorType::SOFTMAX, SOFTMAX, infer::SoftmaxOperator)
+template class infer::SoftmaxOperator<float>;
+template class infer::SoftmaxOperator<__nv_bfloat16>;
 }

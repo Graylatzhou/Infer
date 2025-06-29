@@ -42,11 +42,7 @@ __global__ void rope_forward_kernel(
 
 namespace infer {
 template <typename T>
-void RopeOperator<T>::forward(std::vector<const Tensor<T>*> input0, Tensor<int32_t>* input1, Tensor<T>* output) {
-    const auto input = input0[0];
-    const auto position_ids = input1;
-    const auto sin_table = input0[1];
-    const auto cos_table = input0[2];
+void RopeOperator<T>::forward(const Tensor<T>* input, Tensor<T>* output, const Tensor<T>* sin_table, const Tensor<T>* cos_table, const Tensor<int32_t>* position_ids) {
 
     int seq_len = input->shape()[0];
     int num_heads = input->shape()[1];

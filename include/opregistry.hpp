@@ -1,115 +1,73 @@
 #pragma once
 #include "operator.hpp"
 #include <unordered_map>
-#include <functional>
-
+#include <memory>
+#include <string>
+#include "operator.hpp"
 namespace infer {
-
-// 算子创建函数的类型别名模板
-template <typename T>
-using OperatorCreator = std::function<OperatorPtr<T>()>;
 
 class OperatorRegistry {
 private:
     OperatorRegistry() = default;
-    
-    std::unordered_map<OperatorType, std::unordered_map<std::string, OperatorCreator<float>>> fp32Registry_;
-    std::unordered_map<OperatorType, std::unordered_map<std::string, OperatorCreator<__nv_bfloat16>>> fp16Registry_;
-
+    std::unordered_map<std::string, std::unordered_map<OperatorType, std::unordered_map<std::string, std::shared_ptr<Operator>>>> registry_;
 public:
     static OperatorRegistry& getInstance() {
         static OperatorRegistry instance;
         return instance;
     }
-    
     OperatorRegistry(const OperatorRegistry&) = delete;
     OperatorRegistry& operator=(const OperatorRegistry&) = delete;
-    
-    // fp32 op
-    void registerFP32Operator(OperatorType type, const std::string& name, OperatorCreator<float> creator) {
-        fp32Registry_[type][name] = creator;
+
+    // 非模板注册
+    void registerOperator(OperatorType type, const std::string& name, std::shared_ptr<Operator> op) {
+        std::string type_name = typeid(*op).name();
+        registry_[type_name][type][name] = op;
     }
-    
-    // fp16 op
-    void registerFP16Operator(OperatorType type, const std::string& name, OperatorCreator<__nv_bfloat16> creator) {
-        fp16Registry_[type][name] = creator;
-    }
-    
-    OperatorCreator<float> getFP32Creator(OperatorType type, const std::string& name) {
-        auto typeIt = fp32Registry_.find(type);
-        if (typeIt != fp32Registry_.end()) {
-            auto nameIt = typeIt->second.find(name);
-            if (nameIt != typeIt->second.end()) {
-                return nameIt->second;
+
+    template<typename T, template<typename> class OpClass>
+    std::shared_ptr<OpClass<T>> getOperator(OperatorType type, const std::string& name) {
+        std::string type_name = typeid(OpClass<T>).name();
+        auto typeIt = registry_.find(type_name);
+        if (typeIt != registry_.end()) {
+            auto opIt = typeIt->second.find(type);
+            if (opIt != typeIt->second.end()) {
+                auto nameIt = opIt->second.find(name);
+                if (nameIt != opIt->second.end()) {
+                    return std::dynamic_pointer_cast<OpClass<T>>(nameIt->second);
+                }
             }
         }
         return nullptr;
     }
-
-    OperatorCreator<__nv_bfloat16> getFP16Creator(OperatorType type, const std::string& name) {
-        auto typeIt = fp16Registry_.find(type);
-        if (typeIt != fp16Registry_.end()) {
-            auto nameIt = typeIt->second.find(name);
-            if (nameIt != typeIt->second.end()) {
-                return nameIt->second;
-            }
-        }
-        return nullptr;
-    }
-
-    std::vector<std::pair<OperatorType, std::string>> listOperators() const {
-        std::vector<std::pair<OperatorType, std::string>> result;
-        for (const auto& [type, map] : fp32Registry_) {
-            for (const auto& [name, _] : map) {
-                result.push_back({type, name});
-            }
-        }
-        for (const auto& [type, map] : fp16Registry_) {
-            for (const auto& [name, _] : map) {
-                result.push_back({type, name});
-            }
-        }
-        return result;
-    }
-    void printRegisteredOperators() const {
-        std::cout << "=== Registered FP32 Operators ===" << std::endl;
-        for (const auto& [type, operators] : fp32Registry_) {
-            std::cout << "  Type " << static_cast<int>(type) << ":" << std::endl;
-            for (const auto& [name, _] : operators) {
-                std::cout << "    - " << name << std::endl;
-            }
-        }
-        
-        std::cout << "=== Registered FP16 Operators ===" << std::endl;
-        for (const auto& [type, operators] : fp16Registry_) {
-            std::cout << "  Type " << static_cast<int>(type) << ":" << std::endl;
-            for (const auto& [name, _] : operators) {
-                std::cout << "    - " << name << std::endl;
+    void listRegisteredOperators() const {
+        std::cout << "=== Registered Operators ===" << std::endl;
+        for (const auto& [type_name, type_map] : registry_) {
+            std::cout << "TypeName: " << type_name << std::endl;
+            for (const auto& [op_type, name_map] : type_map) {
+                std::cout << "  OperatorType: " << static_cast<int>(op_type) << std::endl;
+                for (const auto& [name, ptr] : name_map) {
+                    std::cout << "    Name: " << name << std::endl;
+                }
             }
         }
     }
 };
 
-#define REGISTER_FP32_OPERATOR(type, name, classname) \
-    static bool _registered_fp32_##name = []() { \
-        infer::OperatorRegistry::getInstance().registerFP32Operator( \
-            type, #name, []() -> infer::OperatorPtr<float> { \
-                return std::make_shared<classname<float>>(); \
-            }); \
-        return true; \
-    }();
-
-#define REGISTER_FP16_OPERATOR(type, name, classname) \
-    static bool _registered_fp16_##name = []() { \
-        infer::OperatorRegistry::getInstance().registerFP16Operator( \
-            type, #name, []() -> infer::OperatorPtr<__nv_bfloat16> { \
-                return std::make_shared<classname<__nv_bfloat16>>(); \
-            }); \
-        return true; \
-    }();
-
-#define REGISTER_OPERATOR(type, name, classname) \
-    REGISTER_FP32_OPERATOR(type, name, classname) \
-    REGISTER_FP16_OPERATOR(type, name, classname)
+#define REGISTER_OPERATOR(type, name, classname, data_type) \
+    if constexpr (std::is_same_v<data_type, __nv_bfloat16>) { \
+        auto instance_bfloat16 = std::make_shared<classname<__nv_bfloat16>>(); \
+        static bool _registered_##classname##_##name = [instance_bfloat16]() { \
+            infer::OperatorRegistry::getInstance().registerOperator(type, #name, instance_bfloat16); \
+            return true; \
+        }(); \
+    } else if constexpr (std::is_same_v<data_type, float>) { \
+        auto instance_float = std::make_shared<classname<float>>(); \
+        static bool _registered_##classname##_##name##_float = [instance_float]() { \
+            infer::OperatorRegistry::getInstance().registerOperator(type, #name, instance_float); \
+            return true; \
+        }(); \
+    } else { \
+        throw std::runtime_error("Unsupported data type for operator registration"); \
+    } 
 
 } // namespace infer

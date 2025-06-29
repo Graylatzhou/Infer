@@ -6,14 +6,13 @@
 
 namespace infer {
 template <typename T>   
-
-class SiluOperator : public Operator<T> {
+class SiluOperator : public Operator {
 public:
-    void forward(std::vector<const Tensor<T>*> input, Tensor<T>* output);
+    void forward(const Tensor<T>* input, Tensor<T>* output);
     
     OperatorType type() const override { return OperatorType::SILU; }
     std::string name() const override { return "SILU"; }
 };
-
-REGISTER_OPERATOR(infer::OperatorType::SILU, Silu, infer::SiluOperator)
+template class infer::SiluOperator<float>;
+template class infer::SiluOperator<__nv_bfloat16>;
 }

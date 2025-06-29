@@ -6,16 +6,16 @@
 
 namespace infer {
 template <typename T>
-class MulOperator : public Operator<T> {
+class MulOperator : public Operator {
 public:
-    void forward(std::vector<const Tensor<T>*> input0, Tensor<T>* output);
+    void forward(const Tensor<T>* a, const Tensor<T>* b, Tensor<T>* output);
     
     OperatorType type() const override { return OperatorType::MUL; }
     std::string name() const override { return "MUL"; }
 
     
 private:
-
 };
-REGISTER_OPERATOR(infer::OperatorType::MUL, Mul, infer::MulOperator)
+template class infer::MulOperator<float>;
+template class infer::MulOperator<__nv_bfloat16>;
 } // namespace infer

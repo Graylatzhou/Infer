@@ -6,12 +6,12 @@
 
 namespace infer {
 template <typename T>
-class MatMulOperator : public Operator<T> {
+class MatMulOperator : public Operator {
 public:
     MatMulOperator();
     ~MatMulOperator();
     
-    void forward(std::vector<const Tensor<T>*> input0, Tensor<T>* output);
+    void forward(const Tensor<T>* A, const Tensor<T>* B, Tensor<T>* output, Tensor<T>* bias = nullptr);
     
     OperatorType type() const override { return OperatorType::MATMUL; }
     std::string name() const override { return "MatMul"; }
@@ -25,5 +25,6 @@ private:
     cublasHandle_t handle_ = nullptr;
     int algorithm_ = 1; 
 };
-REGISTER_OPERATOR(infer::OperatorType::MATMUL, MatMul, infer::MatMulOperator)
+template class infer::MatMulOperator<float>;
+template class infer::MatMulOperator<__nv_bfloat16>;
 } // namespace infer

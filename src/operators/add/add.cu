@@ -39,14 +39,12 @@ __global__ void add_kernel(const T* input1, const T* input2, T* output, int size
 
 namespace infer {
 template <typename T>
-void AddOperator<T>::forward(std::vector<const Tensor<T>*> input0, Tensor<T>* output) {
-    auto input1 = input0[0]->data_ptr();
-    auto input2 = input0[1]->data_ptr();
-    int size = input0[0]->size();
+void AddOperator<T>::forward(const Tensor<T>* a, const Tensor<T>* b, Tensor<T>* output) {
+    int size = a->size();
 
     int blockSize = 256;
     int numBlocks = (size + blockSize - 1) / blockSize;
-    add_kernel<T, 4><<<numBlocks, blockSize>>>(input1, input2, output->data_ptr(), size);
+    add_kernel<T, 4><<<numBlocks, blockSize>>>(a->data_ptr(), b->data_ptr(), output->data_ptr(), size);
 }
 
 }

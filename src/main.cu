@@ -5,6 +5,7 @@
 #include "opfactory.hpp"
 #include "operator.hpp"
 #include "Inferop.hpp"
+#include "unifiedOp.hpp"
 
 // CPU版本的半精度GEMM
 void cpu_hgemm(const __nv_bfloat16* A, const __nv_bfloat16* B, __nv_bfloat16* C, int M, int N, int K) {
@@ -73,15 +74,16 @@ void initialize_data(__nv_bfloat16* A, __nv_bfloat16* B, int M, int N, int K, bo
 
 int main() {
     using namespace infer;
-    std::cout << "Checking registered operators..." << std::endl;
-    infer::OperatorRegistry::getInstance().printRegisteredOperators();
+
+
     constexpr int N = 1024;
     constexpr int M = 1024;
     constexpr int K = 1024;
     cudaStream_t stream;
     cudaStreamCreate(&stream);
     CudaMemoryPoolManager::getInstance().getBufferPool().initialize();
-
+    auto op = std::make_unique<UnifiedOp<__nv_bfloat16>>();
+    OperatorRegistry::getInstance().listRegisteredOperators();
     auto A = Tensor<__nv_bfloat16>::Buffer({M * K}, Device::CUDA, stream);
     auto B = Tensor<__nv_bfloat16>::Buffer({M * K}, Device::CUDA, stream);
     auto C = Tensor<__nv_bfloat16>::Buffer({M * K}, Device::CUDA, stream);
@@ -94,9 +96,8 @@ int main() {
     B.fill(__float2bfloat16(2));
     C.fill(__float2bfloat16(0));
 
-    auto silukernel = infer::OperatorFactory::create<__nv_bfloat16>(infer::OperatorType::SILU, "Silu");
     // std::vector<const Tensor<__nv_bfloat16>*> inputs = {&A, &B};
-    silukernel->forward({&A}, &C);
+    op->silu(&A, &C);
     initialize_data(A_cpu.data_ptr(), B_cpu.data_ptr(), M, N, K, false);
     cpu_silu(A_cpu.data_ptr(), C_cpu_ref.data_ptr(), A.size());
     CudaMemoryPoolManager::getInstance().getBufferPool().copyAsync(C_cpu.data_ptr(), C.data_ptr(), M * K * sizeof(__nv_bfloat16), cudaMemcpyDeviceToHost, stream);

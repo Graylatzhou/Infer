@@ -238,7 +238,7 @@ void softmax_dispatch(void* y, const void* x, void* stream) {
 
 namespace infer {
 template <typename T>
-void SoftmaxOperator<T>::forward(std::vector<const Tensor<T>*> input0, Tensor<T>* output) {
+void SoftmaxOperator<T>::forward(Tensor<T>* input0, Tensor<T>* output, int32_t axis) {
     // auto input1 = input0[0]->data_ptr();
     // int size = input0[0]->size();
     // int stride = input0[0]->stride(info.axis);

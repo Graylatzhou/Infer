@@ -1,39 +1,58 @@
 #pragma once
 #include "opregistry.hpp"
+#include "operator.hpp"
+#include "operators/silu.hpp"
+#include "operators/softmax.hpp"
+#include "operators/rope.hpp"
+#include "operators/mul.hpp"
+#include "operators/matmul.hpp"
+#include "operators/add.hpp"
+
 
 namespace infer {
-
 class OperatorFactory {
 public:
-    static OperatorPtr<float> createFP32(OperatorType type, const std::string& name) {
-        auto creator = OperatorRegistry::getInstance().getFP32Creator(type, name);
-        if (creator) {
-            return creator();
-        }
-        return nullptr;
+    template<typename T>
+    static void registerOperators() {
+        REGISTER_OPERATOR(OperatorType::MATMUL, MATMUL, MatMulOperator, T);
+        REGISTER_OPERATOR(OperatorType::SOFTMAX, SOFTMAX, SoftmaxOperator, T);
+        REGISTER_OPERATOR(OperatorType::SILU, SILU, SiluOperator, T);
+        REGISTER_OPERATOR(OperatorType::ROPE, ROPE, RopeOperator, T);
+        REGISTER_OPERATOR(OperatorType::MUL, MUL, MulOperator, T);
+        REGISTER_OPERATOR(OperatorType::ADD, ADD, AddOperator, T);
     }
-    static OperatorPtr<__nv_bfloat16> createFP16(OperatorType type, const std::string& name) {
-        auto creator = OperatorRegistry::getInstance().getFP16Creator(type, name);
-        if (creator) {
-            return creator();
-        }
-        return nullptr;
+
+    template<typename T>
+    static std::shared_ptr<MatMulOperator<T>> getMatMulOperator() {
+        return OperatorRegistry::getInstance().getOperator<T, MatMulOperator>(OperatorType::MATMUL, "MATMUL");
     }
-    
-    template <typename T>
-    static OperatorPtr<T> create(OperatorType type, const std::string& name) {
-        if constexpr (std::is_same_v<T, float>) {
-            return createFP32(type, name);
-        } else if constexpr (std::is_same_v<T, __nv_bfloat16>) {
-            return createFP16(type, name);
-        } else {
-            return nullptr;
-        }
+
+    template<typename T>
+    static std::shared_ptr<SoftmaxOperator<T>> getSoftmaxOperator() {
+        return OperatorRegistry::getInstance().getOperator<T, SoftmaxOperator>(OperatorType::SOFTMAX, "SOFTMAX");
     }
-    
-    static std::vector<std::pair<OperatorType, std::string>> listAvailableOperators() {
-        return OperatorRegistry::getInstance().listOperators();
+
+    template<typename T>
+    static std::shared_ptr<SiluOperator<T>> getSiluOperator() {
+        return OperatorRegistry::getInstance().getOperator<T, SiluOperator>(OperatorType::SILU, "SILU");
     }
+
+    template<typename T>
+    static std::shared_ptr<RopeOperator<T>> getRopeOperator() {
+        return OperatorRegistry::getInstance().getOperator<T, RopeOperator>(OperatorType::ROPE, "ROPE");
+    }   
+
+    template<typename T>
+    static std::shared_ptr<MulOperator<T>> getMulOperator() {
+        return OperatorRegistry::getInstance().getOperator<T, MulOperator>(OperatorType::MUL, "MUL");
+    }   
+
+    template<typename T>
+    static std::shared_ptr<AddOperator<T>> getAddOperator() {  
+        return OperatorRegistry::getInstance().getOperator<T, AddOperator>(OperatorType::ADD, "ADD");
+    }
+
+
 };
 
-} 
+}

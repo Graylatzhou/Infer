@@ -6,13 +6,15 @@
 
 namespace infer {
 template <typename T>
-class RopeOperator : public Operator<T> {
+class RopeOperator : public Operator {
 public:
-    void forward(std::vector<const Tensor<T>*> input0, Tensor<int32_t>* input2, Tensor<T>* output);
+    void forward(const Tensor<T>* input, Tensor<T>* output, const Tensor<T>* sin_table, 
+        const Tensor<T>* cos_table, const Tensor<int32_t>* position_ids);
 
     OperatorType type() const override { return OperatorType::ROPE; }
     std::string name() const override { return "Rope"; }
 };
-REGISTER_OPERATOR(infer::OperatorType::ROPE, ROPE, infer::RopeOperator);
 
+template class infer::RopeOperator<float>;
+template class infer::RopeOperator<__nv_bfloat16>;
 } // namespace infer

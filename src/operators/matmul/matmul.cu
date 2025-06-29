@@ -292,11 +292,7 @@ __global__ void print(const half* data) {
 }
 
 template <>
-void MatMulOperator<__nv_bfloat16>::forward(std::vector<const Tensor<__nv_bfloat16>*> input, Tensor<__nv_bfloat16>* output) {
-
-    auto A = input[0];
-    auto B = input[1];
-
+void MatMulOperator<__nv_bfloat16>::forward(const Tensor<__nv_bfloat16>* A, const Tensor<__nv_bfloat16>* B, Tensor<__nv_bfloat16>* output, Tensor<__nv_bfloat16>* bias) {
     if (A->dim() != 2 || B->dim() != 2) {
         throw std::runtime_error("Both input tensors must be 2D matrices.");
     }
@@ -312,7 +308,7 @@ void MatMulOperator<__nv_bfloat16>::forward(std::vector<const Tensor<__nv_bfloat
 
     cublasGemmEx(handle_, CUBLAS_OP_N, CUBLAS_OP_N, N, M, K, &alpha, B->data_ptr(),
       CUDA_R_16F, N, A->data_ptr(), CUDA_R_16F, K, &beta, output->data_ptr(), CUDA_R_16F, N,
-      CUBLAS_COMPUTE_16F, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
+      CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
 }
 template <typename T>
 MatMulOperator<T>::MatMulOperator() {
@@ -330,9 +326,7 @@ MatMulOperator<T>::~MatMulOperator() {
 
 
 template <>
-void MatMulOperator<float>::forward(std::vector<const Tensor<float>*> input, Tensor<float>* output) {
-    auto A = input[0];
-    auto B = input[1];
+void MatMulOperator<float>::forward(const Tensor<float>* A, const Tensor<float>* B, Tensor<float>* output, Tensor<float>* bias) {
     if (A->dim() != 2 || B->dim() != 2) {
         throw std::runtime_error("Both input tensors must be 2D matrices.");
     }
@@ -349,7 +343,7 @@ void MatMulOperator<float>::forward(std::vector<const Tensor<float>*> input, Ten
     static float beta = 0.0;
   
     cublasGemmEx(handle_, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, &alpha, B->data_ptr(), CUDA_R_32F,
-                 n, A, CUDA_R_32F, k, &beta, output->data_ptr(), CUDA_R_32F, n, CUBLAS_COMPUTE_32F,
+                 n, A->data_ptr(), CUDA_R_32F, k, &beta, output->data_ptr(), CUDA_R_32F, n, CUBLAS_COMPUTE_32F,
                  CUBLAS_GEMM_DEFAULT);
     
 }
