@@ -1,16 +1,17 @@
 #pragma once
-#include "operators/operator.hpp"
-#include "tensor.hpp"
-#include "operators/opregistry.hpp"
+#include "../operator.hpp"  // 从include根目录引用
+#include "../tensor.hpp"
+#include "../opregistry.hpp"
+#include "cute/tensor.hpp"
 
 namespace infer {
-    __global__ void print(half* data) ;
 template <typename T>
 class MatMulOperator : public Operator<T> {
 public:
     MatMulOperator();
+    ~MatMulOperator();
     
-    Tensor<T> forward(const Tensor<T>&input1, const Tensor<T>&input2, Tensor<T>& output);
+    void forward(std::vector<const Tensor<T>*> input0, Tensor<T>* output);
     
     OperatorType type() const override { return OperatorType::MATMUL; }
     std::string name() const override { return "MatMul"; }
@@ -22,6 +23,7 @@ private:
     bool transposeA_ = false;
     bool transposeB_ = false;
     cublasHandle_t handle_ = nullptr;
+    int algorithm_ = 1; 
 };
-
+REGISTER_OPERATOR(infer::OperatorType::MATMUL, MatMul, infer::MatMulOperator)
 } // namespace infer

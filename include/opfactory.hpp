@@ -12,7 +12,7 @@ public:
         }
         return nullptr;
     }
-    static OperatorPtr<half> createFP16(OperatorType type, const std::string& name) {
+    static OperatorPtr<__nv_bfloat16> createFP16(OperatorType type, const std::string& name) {
         auto creator = OperatorRegistry::getInstance().getFP16Creator(type, name);
         if (creator) {
             return creator();
@@ -24,7 +24,7 @@ public:
     static OperatorPtr<T> create(OperatorType type, const std::string& name) {
         if constexpr (std::is_same_v<T, float>) {
             return createFP32(type, name);
-        } else if constexpr (std::is_same_v<T, half>) {
+        } else if constexpr (std::is_same_v<T, __nv_bfloat16>) {
             return createFP16(type, name);
         } else {
             return nullptr;

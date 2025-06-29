@@ -19,6 +19,7 @@ enum class OperatorType {
     ADD_RMS_NORM,
     MUL,
     ADD,
+    ROPE,
 };
 
 // 支持的数据类型
@@ -37,11 +38,16 @@ using OperatorFP16 = Operator<half>;
 template <typename T>
 class Operator {
 public:
+    virtual void forward(std::vector<const Tensor<T>*> inputs, Tensor<T>* output) {
+        throw std::runtime_error("Not implemented for this operator");
+    }
+
+    virtual void forward(std::vector<const Tensor<T>*> inputs, Tensor<int32_t>* args, Tensor<T>* output) {
+        throw std::runtime_error("Not implemented for this operator");
+    }
     virtual ~Operator() = default;
     
     virtual OperatorType type() const = 0;
-
-    virtual void forward(std::vector<const Tensor<T>*> input0, Tensor<T>* output) = 0;
     
     virtual std::string name() const = 0;
 

@@ -125,33 +125,33 @@ class CudaMemoryPoolManager {
         
         // 访问不同用途的内存池
         CudaStreamMemoryPool& getWeightPool() {
-            if (!persistent_pool_) {
-                persistent_pool_ = new CudaStreamMemoryPool("persistent");
-                persistent_pool_->initialize();
+            if (!weight_pool_) {
+                weight_pool_ = new CudaStreamMemoryPool("weight");
+                weight_pool_->initialize();
                 
                 // 为持久池设置较大的释放阈值，减少内存被归还系统的可能性
                 uint64_t threshold = 1ULL * 1024 * 1024 * 1024;
-                cudaMemPoolSetAttribute(persistent_pool_->getMemPoolHandle(),
+                cudaMemPoolSetAttribute(weight_pool_->getMemPoolHandle(),
                                         cudaMemPoolAttrReleaseThreshold, &threshold);
             }
-            return *persistent_pool_;
+            return *weight_pool_;
         }
         
-        CudaStreamMemoryPool& getTemporaryPool() {
-            if (!temporary_pool_) {
-                temporary_pool_ = new CudaStreamMemoryPool("temporary");
-                temporary_pool_->initialize();
+        CudaStreamMemoryPool& getBufferPool() {
+            if (!buffer_pool_) {
+                buffer_pool_ = new CudaStreamMemoryPool("buffer");
+                buffer_pool_->initialize();
             }
-            return *temporary_pool_;
+            return *buffer_pool_;
         }
         
     private:
-        CudaMemoryPoolManager() : persistent_pool_(nullptr), temporary_pool_(nullptr) {}
+        CudaMemoryPoolManager() : weight_pool_(nullptr), buffer_pool_(nullptr) {}
         ~CudaMemoryPoolManager() {
-            delete persistent_pool_;
-            delete temporary_pool_;
+            delete weight_pool_;
+            delete buffer_pool_;
         }
         
-        CudaStreamMemoryPool* persistent_pool_;
-        CudaStreamMemoryPool* temporary_pool_;
+        CudaStreamMemoryPool* weight_pool_;
+        CudaStreamMemoryPool* buffer_pool_;
     };

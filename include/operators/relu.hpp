@@ -8,7 +8,7 @@ namespace infer {
 template <typename T>
 class ReluOperator : public Operator<T> {
 public:
-    void forward(std::vector<const Tensor<T>*> input0, Tensor<T>* output) override;
+    void forward(std::vector<const Tensor<T>*> input0, Tensor<T>* output);
 
     OperatorType type() const override { return OperatorType::RELU; }
     std::string name() const override { return "Relu"; }

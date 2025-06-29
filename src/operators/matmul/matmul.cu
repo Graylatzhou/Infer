@@ -1,5 +1,4 @@
-#include "matmul.hpp"
-#include <cute/tensor.hpp>
+#include "operators/matmul.hpp"
 
 namespace infer {
 
@@ -293,7 +292,7 @@ __global__ void print(const half* data) {
 }
 
 template <>
-void MatMulOperator<half>::forward(std::vector<const Tensor<half>*> input, Tensor<half>* output) {
+void MatMulOperator<__nv_bfloat16>::forward(std::vector<const Tensor<__nv_bfloat16>*> input, Tensor<__nv_bfloat16>* output) {
 
     auto A = input[0];
     auto B = input[1];
@@ -304,8 +303,8 @@ void MatMulOperator<half>::forward(std::vector<const Tensor<half>*> input, Tenso
     int M = A->shape()[0];
     int N = B->shape()[1];
     int K = A->shape()[1];
-    static half alpha = 1.0;
-    static half beta = 0.0;
+    static __nv_bfloat16 alpha = 1.0;
+    static __nv_bfloat16 beta = 0.0;
     // dim3 block_x(256);
     // dim3 grid_x((n + 127) / 128, (m + 127) / 128);
     // gemm_mma_vectorized_kernel<<<grid_x, block_x, 0, A->getStream()>>>(

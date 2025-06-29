@@ -84,7 +84,6 @@ target_link_libraries(infer
     ${CUBLAS_LIBRARY}
 )
 
-# 为库设置包含路径（现代CMake推荐的方式）
 target_include_directories(infer
     PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

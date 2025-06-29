@@ -1,0 +1,6 @@
+#include "operators/matmul.hpp"
+#include "operators/rope.hpp"
+#include "operators/add.hpp"
+#include "operators/softmax.hpp"
+#include "operators/silu.hpp"
+#include "operators/mul.hpp"

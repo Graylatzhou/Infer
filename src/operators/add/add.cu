@@ -1,15 +1,15 @@
-#include "add.hpp"
+#include "operators/add.hpp"
 
-template <typename T=half, int KNumElemPerThread=4>
+template <typename T=__nv_bfloat16, int KNumElemPerThread=4>
 __global__ void add_kernel(const T* input1, const T* input2, T* output, int size) {
     using namespace cute;
     int total_vec = size / KNumElemPerThread;
     int tidx = threadIdx.x + blockIdx.x * blockDim.x;
     if (tidx * 4 >= size) return;
+    // size - total_vec * KNumElemPerThread = remaining elements
     Tensor input1_tensor = make_tensor(make_gmem_ptr(input1), make_shape(size));
     Tensor input2_tensor = make_tensor(make_gmem_ptr(input2), make_shape(size));
     Tensor output_tensor = make_tensor(make_gmem_ptr(output), make_shape(size));
-
     Tensor tI1gI1 = local_tile(input1_tensor, make_shape(Int<KNumElemPerThread>{}), make_coord(tidx));
     Tensor tI2gI2 = local_tile(input2_tensor, make_shape(Int<KNumElemPerThread>{}), make_coord(tidx));
     Tensor tOgO = local_tile(output_tensor, make_shape(Int<KNumElemPerThread>{}), make_coord(tidx));
@@ -25,7 +25,6 @@ __global__ void add_kernel(const T* input1, const T* input2, T* output, int size
         tOrO(i) = tIrI1(i) + tIrI2(i);
     }
     copy(tOrO, tOgO);
-    // size - total_vec * KNumElemPerThread = remaining elements
     if (size % KNumElemPerThread != 0 && tidx == total_vec) {
         int remaining = size - total_vec * KNumElemPerThread;
         #pragma unroll
@@ -34,7 +33,7 @@ __global__ void add_kernel(const T* input1, const T* input2, T* output, int size
                 output[total_vec * KNumElemPerThread + i] = input1[total_vec * KNumElemPerThread + i] + input2[total_vec * KNumElemPerThread + i];
             }
         }
-    } else return;
+    }
 }
 
 

@@ -1,6 +1,6 @@
-#include "mul.hpp"
+#include "operators/mul.hpp"
 
-template <typename T=half, int KNumElemPerThread=4>
+template <typename T=__nv_bfloat16, int KNumElemPerThread=4>
 __global__ void mul_kernel(const T* input1, const T* input2, T* output, int size) {
     using namespace cute;
     int total_vec = size / KNumElemPerThread;

@@ -14,7 +14,7 @@ private:
     OperatorRegistry() = default;
     
     std::unordered_map<OperatorType, std::unordered_map<std::string, OperatorCreator<float>>> fp32Registry_;
-    std::unordered_map<OperatorType, std::unordered_map<std::string, OperatorCreator<half>>> fp16Registry_;
+    std::unordered_map<OperatorType, std::unordered_map<std::string, OperatorCreator<__nv_bfloat16>>> fp16Registry_;
 
 public:
     static OperatorRegistry& getInstance() {
@@ -31,7 +31,7 @@ public:
     }
     
     // fp16 op
-    void registerFP16Operator(OperatorType type, const std::string& name, OperatorCreator<half> creator) {
+    void registerFP16Operator(OperatorType type, const std::string& name, OperatorCreator<__nv_bfloat16> creator) {
         fp16Registry_[type][name] = creator;
     }
     
@@ -46,7 +46,7 @@ public:
         return nullptr;
     }
 
-    OperatorCreator<half> getFP16Creator(OperatorType type, const std::string& name) {
+    OperatorCreator<__nv_bfloat16> getFP16Creator(OperatorType type, const std::string& name) {
         auto typeIt = fp16Registry_.find(type);
         if (typeIt != fp16Registry_.end()) {
             auto nameIt = typeIt->second.find(name);
@@ -102,8 +102,8 @@ public:
 #define REGISTER_FP16_OPERATOR(type, name, classname) \
     static bool _registered_fp16_##name = []() { \
         infer::OperatorRegistry::getInstance().registerFP16Operator( \
-            type, #name, []() -> infer::OperatorPtr<half> { \
-                return std::make_shared<classname<half>>(); \
+            type, #name, []() -> infer::OperatorPtr<__nv_bfloat16> { \
+                return std::make_shared<classname<__nv_bfloat16>>(); \
             }); \
         return true; \
     }();
