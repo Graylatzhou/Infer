@@ -14,7 +14,7 @@ void SiluOperator<T>::forward(const Tensor<T>* input, Tensor<T>* output) {
     int size = input->size();
     int blockSize = 256;
     int numBlocks = (size + blockSize - 1) / blockSize;
-    silu_kernel<T><<<numBlocks, blockSize>>>(output->data_ptr(), input->data_ptr(), size);
+    silu_kernel<T><<<numBlocks, blockSize, 0, input->getStream()>>>(output->data_ptr(), input->data_ptr(), size);
 }
 } // namespace infer
 

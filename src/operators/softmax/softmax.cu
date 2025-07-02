@@ -84,34 +84,41 @@ j 也就是 (blockIdx.x * blockDim.y + threadIdx.y) % stride
 然后i转化为线性也就是 i * stride * dimsize
 j直接加上就好
 */
-template <int elemPerThread, int BLOCK_DIM_Y, int BLOCK_DIM_X, typename T>
-__global__ void Softmax_warp_impl(const T* x, T* y, int stride, int dimsize, int otherdim_size) {
-    MD thread_md = {-INFINITY, 0.0f};
-    
+template <int ELEM_PER_THREAD, int BLOCK_DIM_Y, int BLOCK_DIM_X, typename T>
+__global__ void Softmax_warp_impl(const T *x, T *y, int stride, int dim_size, int other_size) {
+    float dataPerThread[ELEM_PER_THREAD];
     int global_warp_id = blockIdx.x * blockDim.y + threadIdx.y;
+    int group_offset = global_warp_id % stride + (global_warp_id - global_warp_id % stride) * dim_size;
     int tid = threadIdx.x;
-    
-    if (global_warp_id >= otherdim_size) return;
-    
-    int block_offset = (global_warp_id / stride) * (stride * dimsize) + global_warp_id % stride;
-    
-    // 第一遍扫描：计算max和sum（online softmax方式）
-    for (int i = tid; i < dimsize; i += BLOCK_DIM_X) {
-        int index = i * stride + block_offset;
-        float val = static_cast<float>(x[index]);
-        MD single_element = {val, 1.0f};
-        thread_md = reduce_for_md(thread_md, single_element);
+    if (global_warp_id >= other_size) {
+        return;
     }
-    
-    // Warp级别的reduce
-    thread_md = warp_all_reduce_for_ml(thread_md);
-    
-    // 第二遍扫描：计算softmax输出
-    for (int i = tid; i < dimsize; i += BLOCK_DIM_X) {
-        int index = i * stride + block_offset;
-        float val = static_cast<float>(x[index]);
-        float exp_val = __expf(val - thread_md.max);
-        y[index] = static_cast<T>(exp_val / thread_md.sum);
+    __shared__ float group_max[BLOCK_DIM_X];
+    __shared__ float group_sum[BLOCK_DIM_X];
+    float thread_max = -INFINITY;
+    float thread_sum = 0.0f;
+    for (int i = 0; tid + i * BLOCK_DIM_X < dim_size; i++) {
+        dataPerThread[i] = static_cast<float>(x[(tid + i * BLOCK_DIM_X) * stride + group_offset]);
+        thread_max = max(thread_max, dataPerThread[i]);
+    }
+
+    thread_max = warpReduce<float, MaxOp>(thread_max);
+    if (tid == 0) {
+        group_max[threadIdx.y] = thread_max;
+    }
+
+    for (int i = 0; tid + i * BLOCK_DIM_X < dim_size; i++) {
+        dataPerThread[i] = __expf(dataPerThread[i] - group_max[threadIdx.y]);
+        thread_sum += dataPerThread[i];
+    }
+
+    thread_sum = warpReduce<float, SumOp>(thread_sum);
+    if (tid == 0) {
+        group_sum[threadIdx.y] = thread_sum;
+    }
+
+    for (int i = 0; tid + i * BLOCK_DIM_X < dim_size; i++) {
+        y[(tid + i * BLOCK_DIM_X) * stride + group_offset] = static_cast<T>(dataPerThread[i] * __fdividef(1.0f, group_sum[threadIdx.y]));
     }
 }
 
@@ -167,84 +174,96 @@ __global__ void Softmax_block_impl(const T* x, T* y, int stride, int dimsize, in
 }
 
 template <typename T>
-void softmax_dispatch(void* y, const void* x, void* stream) {
-    // int dimsize = info.dimsize;
-    // int stride = info.stride;
-    // int otherdim_size = info.otherdim_size;
-    // if (dimsize <= 1024) {
-    //     dim3 block(32, 32);  // BLOCK_DIM_X=32, BLOCK_DIM_Y=4
-    //     int num_blocks = (otherdim_size + block.y - 1) / block.y;
-    //     dim3 grid(num_blocks, 1, 1);
-    //     int elemPerThread = (dimsize + 31) / 32;  // 计算每个线程需要处理的元素数
-    //     elemPerThread = min(elemPerThread, 32);   // 限制最大值
-    //     if (elemPerThread <= 1) {
-    //         Softmax_warp_impl<1, 32, 32, T>  
-    //             <<<grid, block, 0, reinterpret_cast<cudaStream_t>(stream)>>>(
-    //                 reinterpret_cast<const T*>(x), reinterpret_cast<T*>(y), stride, dimsize, otherdim_size);
-    //     } else if (elemPerThread <= 2) {
-    //         Softmax_warp_impl<2, 32, 32, T>
-    //             <<<grid, block, 0, reinterpret_cast<cudaStream_t>(stream)>>>(
-    //                 reinterpret_cast<const T*>(x), reinterpret_cast<T*>(y), stride, dimsize, otherdim_size);
-    //     } else if (elemPerThread <= 4) {
-    //         Softmax_warp_impl<4, 32, 32, T>
-    //             <<<grid, block, 0, reinterpret_cast<cudaStream_t>(stream)>>>(
-    //                 reinterpret_cast<const T*>(x), reinterpret_cast<T*>(y), stride, dimsize, otherdim_size);
-    //     } else if (elemPerThread <= 8) {
-    //         Softmax_warp_impl<8, 32, 32, T>
-    //             <<<grid, block, 0, reinterpret_cast<cudaStream_t>(stream)>>>(
-    //                 reinterpret_cast<const T*>(x), reinterpret_cast<T*>(y), stride, dimsize, otherdim_size);
-    //     } else if (elemPerThread <= 16) {
-    //         Softmax_warp_impl<16, 32, 32, T>
-    //             <<<grid, block, 0, reinterpret_cast<cudaStream_t>(stream)>>>(
-    //                 reinterpret_cast<const T*>(x), reinterpret_cast<T*>(y), stride, dimsize, otherdim_size);
-    //     } else {
-    //         Softmax_warp_impl<32, 32, 32, T>
-    //             <<<grid, block, 0, reinterpret_cast<cudaStream_t>(stream)>>>(
-    //                 reinterpret_cast<const T*>(x), reinterpret_cast<T*>(y), stride, dimsize, otherdim_size);
-    //     }
-    // } else if (dimsize > 1024) {
-    //     int block_size = 1024;
-    //     int elemPerThread = (dimsize + block_size - 1) / block_size;  // 每个线程需要处理的元素数
-    //     elemPerThread = min(elemPerThread, 32);  // 限制最大值为32
-    //     dim3 block(block_size);
-    //     dim3 grid(otherdim_size);
-    //     if (elemPerThread <= 1) {
-    //         Softmax_block_impl<1, 1024, T>
-    //             <<<grid, block, 0, reinterpret_cast<cudaStream_t>(stream)>>>(
-    //                 reinterpret_cast<const T*>(x), reinterpret_cast<T*>(y), stride, dimsize, otherdim_size);
-    //     } else if (elemPerThread <= 2) {
-    //         Softmax_block_impl<2, 1024, T>
-    //             <<<grid, block, 0, reinterpret_cast<cudaStream_t>(stream)>>>(
-    //                 reinterpret_cast<const T*>(x), reinterpret_cast<T*>(y), stride, dimsize, otherdim_size);
-    //     } else if (elemPerThread <= 4) {
-    //         Softmax_block_impl<4, 1024, T>
-    //             <<<grid, block, 0, reinterpret_cast<cudaStream_t>(stream)>>>(
-    //                 reinterpret_cast<const T*>(x), reinterpret_cast<T*>(y), stride, dimsize, otherdim_size);
-    //     } else if (elemPerThread <= 8) {
-    //         Softmax_block_impl<8, 1024, T>
-    //             <<<grid, block, 0, reinterpret_cast<cudaStream_t>(stream)>>>(
-    //                 reinterpret_cast<const T*>(x), reinterpret_cast<T*>(y), stride, dimsize, otherdim_size);
-    //     } else if (elemPerThread <= 16) {
-    //         Softmax_block_impl<16, 1024, T>
-    //             <<<grid, block, 0, reinterpret_cast<cudaStream_t>(stream)>>>(
-    //                 reinterpret_cast<const T*>(x), reinterpret_cast<T*>(y), stride, dimsize, otherdim_size);
-    //     } else {
-    //         Softmax_block_impl<32, 1024, T>
-    //             <<<grid, block, 0, reinterpret_cast<cudaStream_t>(stream)>>>(
-    //                 reinterpret_cast<const T*>(x), reinterpret_cast<T*>(y), stride, dimsize, otherdim_size);
-    //     } 
-    // }
+void dispatchSoftmaxKernel(
+    const void *x, void *y,
+    int stride, int dim_size, int other_size,
+    void *stream, bool use_warp_impl) {
+
+    int elemPerThread;
+    dim3 grid, block;
+
+    if (use_warp_impl) {
+        block = dim3(32, 32);
+        grid = dim3((other_size + block.y - 1) / block.y, 1, 1);
+        elemPerThread = min((dim_size + 31) / 32, 32);
+
+#define LAUNCH_WARP_KERNEL(ELEM_PER_THREAD)                           \
+    Softmax_warp_impl<ELEM_PER_THREAD, 32, 32, T>                     \
+        <<<grid, block, 0, reinterpret_cast<cudaStream_t>(stream)>>>( \
+            reinterpret_cast<const T *>(x), reinterpret_cast<T *>(y), \
+            stride, dim_size, other_size)
+
+        if (elemPerThread <= 1) {
+            LAUNCH_WARP_KERNEL(1);
+        } else if (elemPerThread <= 2) {
+            LAUNCH_WARP_KERNEL(2);
+        } else if (elemPerThread <= 4) {
+            LAUNCH_WARP_KERNEL(4);
+        } else if (elemPerThread <= 8) {
+            LAUNCH_WARP_KERNEL(8);
+        } else if (elemPerThread <= 16) {
+            LAUNCH_WARP_KERNEL(16);
+        } else {
+            LAUNCH_WARP_KERNEL(32);
+        }
+
+#undef LAUNCH_WARP_KERNEL
+
+    } else {
+        // Block implementation for dim_size > 1024
+        constexpr int BLOCK_SIZE = 1024;
+        block = dim3(BLOCK_SIZE);
+        grid = dim3(other_size);
+        elemPerThread = min((dim_size + BLOCK_SIZE - 1) / BLOCK_SIZE, 32);
+
+#define LAUNCH_BLOCK_KERNEL(ELEM_PER_THREAD)                          \
+    Softmax_block_impl<ELEM_PER_THREAD, BLOCK_SIZE, T>                \
+        <<<grid, block, 0, reinterpret_cast<cudaStream_t>(stream)>>>( \
+            reinterpret_cast<const T *>(x), reinterpret_cast<T *>(y), \
+            stride, dim_size, other_size)
+
+        if (elemPerThread <= 1) {
+            LAUNCH_BLOCK_KERNEL(1);
+        } else if (elemPerThread <= 2) {
+            LAUNCH_BLOCK_KERNEL(2);
+        } else if (elemPerThread <= 4) {
+            LAUNCH_BLOCK_KERNEL(4);
+        } else if (elemPerThread <= 8) {
+            LAUNCH_BLOCK_KERNEL(8);
+        } else if (elemPerThread <= 16) {
+            LAUNCH_BLOCK_KERNEL(16);
+        } else {
+            LAUNCH_BLOCK_KERNEL(32);
+        }
+
+#undef LAUNCH_BLOCK_KERNEL
+    }
+}
+
+
+template <typename T>
+void softmax_dispatch(void* y, const void* x, int size, int dim_size, int other_size, int stride, void* stream) {
+    if (dim_size <= 1024) {
+        dispatchSoftmaxKernel<T>(
+            x, y, stride, dim_size, other_size, stream, true);
+    } else if (dim_size > 1024) {
+        dispatchSoftmaxKernel<T>(
+            x, y, stride, dim_size, other_size, stream, false);
+    } else {
+        throw std::runtime_error("Unsupported dimension size for softmax operation.");
+    }
 }
 
 namespace infer {
 template <typename T>
 void SoftmaxOperator<T>::forward(Tensor<T>* input0, Tensor<T>* output, int32_t axis) {
-    // auto input1 = input0[0]->data_ptr();
-    // int size = input0[0]->size();
-    // int stride = input0[0]->stride(info.axis);
-    // int dimsize = input0[0]->dim(info.axis);
-    // int otherdim_size = size / dimsize;
-
-    // softmax_dispatch<T>(output->data_ptr(), input1, output->stream());
+    int size = static_cast<int>(input0->size());
+    int stride = 0;
+    int dim_size = static_cast<int>(input0->shape()[axis]);
+    for (int i = axis + 1; i < input0->ndim(); i++) {
+        stride *= static_cast<int>(input0->shape()[i]);
+    }
+    int other_size = size / dim_size;
+    softmax_dispatch<T>(output->data_ptr(), input0, size, dim_size, other_size, stride, output->getStream());
 }
 }

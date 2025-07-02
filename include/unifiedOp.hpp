@@ -63,6 +63,16 @@ public:
             throw std::runtime_error("Mul operator not found");
         }
     }   
+
+    void rms_norm(const Tensor<T>* input, const Tensor<T>* weight, Tensor<T>* output, 
+        const Tensor<T>* bias = nullptr) {
+        auto op = OperatorFactory::getAddRMSOperator<T>();
+        if (op) {
+            op->forward(input, weight, output, bias);
+        } else {
+            throw std::runtime_error("AddRMS operator not found");
+        }
+    }
 };
 }
 

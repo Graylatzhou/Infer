@@ -41,10 +41,9 @@ namespace infer {
 template <typename T>
 void AddOperator<T>::forward(const Tensor<T>* a, const Tensor<T>* b, Tensor<T>* output) {
     int size = a->size();
-
     int blockSize = 256;
     int numBlocks = (size + blockSize - 1) / blockSize;
-    add_kernel<T, 4><<<numBlocks, blockSize>>>(a->data_ptr(), b->data_ptr(), output->data_ptr(), size);
+    add_kernel<T, 4><<<numBlocks, blockSize, 0, a->getStream()>>>(a->data_ptr(), b->data_ptr(), output->data_ptr(), size);
 }
 
 }

@@ -293,7 +293,7 @@ __global__ void print(const half* data) {
 
 template <>
 void MatMulOperator<__nv_bfloat16>::forward(const Tensor<__nv_bfloat16>* A, const Tensor<__nv_bfloat16>* B, Tensor<__nv_bfloat16>* output, Tensor<__nv_bfloat16>* bias) {
-    if (A->dim() != 2 || B->dim() != 2) {
+    if (A->ndim() != 2 || B->ndim() != 2) {
         throw std::runtime_error("Both input tensors must be 2D matrices.");
     }
     int M = A->shape()[0];
@@ -327,7 +327,7 @@ MatMulOperator<T>::~MatMulOperator() {
 
 template <>
 void MatMulOperator<float>::forward(const Tensor<float>* A, const Tensor<float>* B, Tensor<float>* output, Tensor<float>* bias) {
-    if (A->dim() != 2 || B->dim() != 2) {
+    if (A->ndim() != 2 || B->ndim() != 2) {
         throw std::runtime_error("Both input tensors must be 2D matrices.");
     }
 

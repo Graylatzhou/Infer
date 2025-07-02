@@ -67,40 +67,77 @@ void initialize_data(__nv_bfloat16* A, __nv_bfloat16* B, int M, int N, int K, bo
           A[i] = __float2bfloat16(2);
       }
       for (int i = 0; i < M * K; i++) {
-          B[i] = __float2bfloat16(2);
+          B[i] = __float2bfloat16(3);
       }
   }
+}
+
+void cpu_add_rms_norm(const __nv_bfloat16* input, const __nv_bfloat16* weight, __nv_bfloat16* output, 
+                      int other_size, int dim_size, float eps, const __nv_bfloat16* bias = nullptr) {
+    #pragma omp parallel for
+    for (int i = 0; i < other_size; ++i) {
+        // 1. 计算当前行的平方和
+        float ss = 0.0f;
+        for (int j = 0; j < dim_size; ++j) {
+            float val = __bfloat162float(input[i * dim_size + j]);
+            ss += val * val;
+        }
+
+        // 2. 计算归一化因子 (1 / RMS)
+        float norm_factor = 1.0f / sqrtf(ss / dim_size + eps);
+
+        // 3. 归一化、缩放并可选地添加偏置
+        for (int j = 0; j < dim_size; ++j) {
+            float val = __bfloat162float(input[i * dim_size + j]);
+            float w = __bfloat162float(weight[j]);
+            float normalized_val = val * norm_factor;
+            float scaled_val = normalized_val * w;
+
+            if (bias) {
+                scaled_val += __bfloat162float(bias[j]);
+            }
+            
+            output[i * dim_size + j] = __float2bfloat16(scaled_val);
+        }
+    }
 }
 
 int main() {
     using namespace infer;
 
-
-    constexpr int N = 1024;
-    constexpr int M = 1024;
-    constexpr int K = 1024;
+    constexpr int other_size = 1024; // 使用更清晰的命名
+    constexpr int dim_size = 1024;
     cudaStream_t stream;
     cudaStreamCreate(&stream);
     CudaMemoryPoolManager::getInstance().getBufferPool().initialize();
     auto op = std::make_unique<UnifiedOp<__nv_bfloat16>>();
     OperatorRegistry::getInstance().listRegisteredOperators();
-    auto A = Tensor<__nv_bfloat16>::Buffer({M * K}, Device::CUDA, stream);
-    auto B = Tensor<__nv_bfloat16>::Buffer({M * K}, Device::CUDA, stream);
-    auto C = Tensor<__nv_bfloat16>::Buffer({M * K}, Device::CUDA, stream);
-    auto C_cpu = Tensor<__nv_bfloat16>::Buffer({M * K}, Device::CPU, stream);
-    auto C_cpu_ref = Tensor<__nv_bfloat16>::Buffer({M * K}, Device::CPU, stream);
-    auto A_cpu = Tensor<__nv_bfloat16>::Buffer({M * K}, Device::CPU, stream);
-    auto B_cpu = Tensor<__nv_bfloat16>::Buffer({M * K}, Device::CPU, stream);
+
+    // --- 修正 Tensor 的 Shape 和大小 ---
+    // GPU Tensors
+    auto A = Tensor<__nv_bfloat16>::Buffer({other_size, dim_size}, Device::CUDA, stream);
+    auto B = Tensor<__nv_bfloat16>::Buffer({dim_size}, Device::CUDA, stream); // weight 是一维的
+    auto C = Tensor<__nv_bfloat16>::Buffer({other_size, dim_size}, Device::CUDA, stream);
+
+    // CPU Tensors
+    auto A_cpu = Tensor<__nv_bfloat16>::Buffer({other_size, dim_size}, Device::CPU, stream);
+    auto B_cpu = Tensor<__nv_bfloat16>::Buffer({dim_size}, Device::CPU, stream); // weight_cpu 是一维的
+    auto C_cpu = Tensor<__nv_bfloat16>::Buffer({other_size, dim_size}, Device::CPU, stream);
+    auto C_cpu_ref = Tensor<__nv_bfloat16>::Buffer({other_size, dim_size}, Device::CPU, stream);
 
     A.fill(__float2bfloat16(2));
-    B.fill(__float2bfloat16(2));
+    B.fill(__float2bfloat16(3));
     C.fill(__float2bfloat16(0));
 
-    // std::vector<const Tensor<__nv_bfloat16>*> inputs = {&A, &B};
-    op->silu(&A, &C);
-    initialize_data(A_cpu.data_ptr(), B_cpu.data_ptr(), M, N, K, false);
-    cpu_silu(A_cpu.data_ptr(), C_cpu_ref.data_ptr(), A.size());
-    CudaMemoryPoolManager::getInstance().getBufferPool().copyAsync(C_cpu.data_ptr(), C.data_ptr(), M * K * sizeof(__nv_bfloat16), cudaMemcpyDeviceToHost, stream);
+    op->rms_norm(&A, &B, &C, nullptr);
+    cudaDeviceSynchronize(); // 等待 GPU 完成
+
+    initialize_data(A_cpu.data_ptr(), B_cpu.data_ptr(), other_size, 1, dim_size, false);
+    
+    // 使用正确的 other_size 和 dim_size 调用
+    cpu_add_rms_norm(A_cpu.data_ptr(), B_cpu.data_ptr(), C_cpu_ref.data_ptr(), other_size, dim_size, 1e-6f, nullptr);
+    cudaStreamSynchronize(stream); 
+    CudaMemoryPoolManager::getInstance().getBufferPool().copyAsync(C_cpu.data_ptr(), C.data_ptr(), C.size() * sizeof(__nv_bfloat16), cudaMemcpyDeviceToHost, stream);
     // Tensor<__nv_bfloat16> A({M, N}, Device::CUDA, "temporary", stream);
     // Tensor<__nv_bfloat16> B({N, K}, Device::CUDA, "temporary", stream);
     // Tensor<__nv_bfloat16> C({M, N}, Device::CUDA, "temporary", stream);
@@ -120,7 +157,7 @@ int main() {
     // CudaMemoryPoolManager::getInstance().getTemporaryPool().copyAsync(C_cpu.data_ptr(), C.data_ptr(), M * N * sizeof(half), cudaMemcpyDeviceToHost, stream);
     // 现在可以比较CPU和GPU的结果
     bool correct = true;
-    for (int i = 0; i < M * N; i++) {
+    for (int i = 0; i < other_size * dim_size; i++) {
         float diff = fabs(__bfloat162float(C_cpu.data_ptr()[i]) - __bfloat162float(C_cpu_ref.data_ptr()[i]));
         if (diff > 1e-4) {
             correct = false;

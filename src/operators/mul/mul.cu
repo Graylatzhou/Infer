@@ -45,7 +45,7 @@ void MulOperator<T>::forward(const Tensor<T>* a, const Tensor<T>* b, Tensor<T>* 
 
     int blockSize = 256;
     int numBlocks = (size + blockSize - 1) / blockSize;
-    mul_kernel<T, 4><<<numBlocks, blockSize>>>(a->data_ptr(), b->data_ptr(), output->data_ptr(), size);
+    mul_kernel<T, 4><<<numBlocks, blockSize, 0, a->getStream()>>>(a->data_ptr(), b->data_ptr(), output->data_ptr(), size);
 }
 
 }

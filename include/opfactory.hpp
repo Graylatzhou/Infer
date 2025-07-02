@@ -7,6 +7,7 @@
 #include "operators/mul.hpp"
 #include "operators/matmul.hpp"
 #include "operators/add.hpp"
+#include "operators/add_rms.hpp"
 
 
 namespace infer {
@@ -20,6 +21,7 @@ public:
         REGISTER_OPERATOR(OperatorType::ROPE, ROPE, RopeOperator, T);
         REGISTER_OPERATOR(OperatorType::MUL, MUL, MulOperator, T);
         REGISTER_OPERATOR(OperatorType::ADD, ADD, AddOperator, T);
+        REGISTER_OPERATOR(OperatorType::ADD_RMS_NORM, ADD_RMS_NORM, AddRMSOperator, T);
     }
 
     template<typename T>
@@ -51,7 +53,11 @@ public:
     static std::shared_ptr<AddOperator<T>> getAddOperator() {  
         return OperatorRegistry::getInstance().getOperator<T, AddOperator>(OperatorType::ADD, "ADD");
     }
-
+    
+    template<typename T>
+    static std::shared_ptr<AddRMSOperator<T>> getAddRMSOperator() {
+        return OperatorRegistry::getInstance().getOperator<T, AddRMSOperator>(OperatorType::ADD_RMS_NORM, "ADD_RMS_NORM");
+    }
 
 };
 

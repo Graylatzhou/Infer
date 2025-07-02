@@ -202,7 +202,7 @@ public:
         return tag_;
     }
 
-    size_t dim() const {
+    size_t ndim() const {
         return shape_.size();
     }
 

@@ -1,4 +1,8 @@
 cmake_minimum_required(VERSION 3.18 FATAL_ERROR)
+
+# 在 project 语句之前，设置 CUDA 编译器路径（确保指向 12.8 版本）
+set(CMAKE_CUDA_COMPILER "/usr/local/cuda-12.8/bin/nvcc")
+
 project(Infer LANGUAGES CXX CUDA)
 
 # 设置 C++ 标准
@@ -27,17 +31,16 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -rdynamic")
 endif()
 
-# 找到CUDA和cuBLAS
-find_package(CUDA REQUIRED)
-find_library(CUBLAS_LIBRARY cublas HINTS ${CUDA_TOOLKIT_ROOT_DIR}/lib64)
-if(NOT CUBLAS_LIBRARY)
-    message(FATAL_ERROR "cuBLAS library not found")
-endif()
+# 使用现代 CMake 方法查找 CUDA Toolkit
+find_package(CUDAToolkit 12.0 REQUIRED)
 
-# 输出信息
-message(STATUS "CUDA version: ${CUDA_VERSION}")
-message(STATUS "CUDA libraries: ${CUDA_LIBRARIES}")
-message(STATUS "cuBLAS library: ${CUBLAS_LIBRARY}")
+# 输出信息以确认正确的版本
+message(STATUS "CUDA compiler: ${CMAKE_CUDA_COMPILER}")
+message(STATUS "CUDA compiler version: ${CMAKE_CUDA_COMPILER_VERSION}")
+message(STATUS "CUDA Toolkit version: ${CUDAToolkit_VERSION}")
+message(STATUS "CUDA Toolkit root directory: ${CUDAToolkit_ROOT}")
+message(STATUS "CUDA include directories: ${CUDAToolkit_INCLUDE_DIRS}")
+message(STATUS "CUDA libraries: ${CUDAToolkit_LIBRARIES}")
 
 # cutlass
 set(CUTLASS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/cutlass)
@@ -48,7 +51,7 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CUTLASS_DIR}/include
     ${CUTLASS_DIR}/tools/util/include
-    ${CUDA_INCLUDE_DIRS}
+    ${CUDAToolkit_INCLUDE_DIRS}
 )
 
 # 显式列出主要操作符目录
@@ -80,8 +83,8 @@ set_target_properties(infer PROPERTIES
 )
 
 target_link_libraries(infer
-    ${CUDA_LIBRARIES}
-    ${CUBLAS_LIBRARY}
+    CUDA::cudart
+    CUDA::cublas
 )
 
 target_include_directories(infer
@@ -89,7 +92,7 @@ target_include_directories(infer
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
     PRIVATE
-    ${CUDA_INCLUDE_DIRS}
+    ${CUDAToolkit_INCLUDE_DIRS}
     third_party/cutlass/include
     third_party/cutlass/tools/util/include
 )
