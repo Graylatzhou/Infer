@@ -28,11 +28,11 @@ public:
     using Stride = std::vector<size_t>;
     //构造空张量
     Tensor() 
-     : shape_({}), device_(Device::CPU), stride_({}), data_(nullptr), gpu_data_(nullptr), total_size_(0), offset_(0) {}
+     : shape_({}), device_(Device::CPU), stride_({}), data_(nullptr), gpu_data_(nullptr), total_size_(0), offset_(0), tag_(Usage::Buffer){}
     // 构造指定形状的张量
     // tag分为weight和temporary两种
     Tensor(const std::vector<size_t>& shape, Device device, cudaStream_t stream = nullptr)
-     : shape_(shape), device_(device), stream_(stream) {
+     : shape_(shape), device_(device), stream_(stream), tag_(Usage::Buffer) {
         stride_.resize(shape.size());
         size_t total_size = 1;
         for (int i = shape.size() - 1; i >= 0; --i) {
@@ -46,9 +46,9 @@ public:
         } else if (device_ == Device::CUDA) {
             data_ = nullptr;
             T* gpu_ptr = nullptr;
-            gpu_ptr = static_cast<T*>(CudaMemoryPoolManager::getInstance().getBufferPool().allocate(total_size * sizeof(T), stream_));
-            gpu_data_ = std::shared_ptr<T>(gpu_ptr, [this](T* ptr) {
-                 CudaMemoryPoolManager::getInstance().getBufferPool().free(ptr, stream_);
+            gpu_ptr = static_cast<T*>(CudaMemoryManager::getInstance().getBufferPool().allocate(total_size * sizeof(T), stream_));
+            gpu_data_ = std::shared_ptr<T>(gpu_ptr, [](T* ptr) {
+                CudaMemoryManager::getInstance().getBufferPool().free(ptr);
             });
         } else {
             throw std::runtime_error("Unsupported device type"); 
@@ -56,7 +56,7 @@ public:
     }
 
     Tensor (const std::vector<size_t>& shape, Device device, void* weight_data, cudaStream_t stream = nullptr)
-    : shape_(shape), device_(device), stream_(stream) {
+    : shape_(shape), device_(device), stream_(stream), tag_(Usage::Weight) {
         stride_.resize(shape.size());
         size_t total_size = 1;
         for (int i = shape.size() - 1; i >= 0; --i) {
@@ -70,11 +70,11 @@ public:
             memcpy(data_->data(), weight_data, total_size * sizeof(T));
         } else if (device_ == Device::CUDA) {
             data_ = nullptr;
-            T* gpu_ptr = static_cast<T*>(CudaMemoryPoolManager::getInstance().getWeightPool().allocate(total_size * sizeof(T), stream_));
-            gpu_data_ = std::shared_ptr<T>(gpu_ptr, [this](T* ptr) {
-                 CudaMemoryPoolManager::getInstance().getWeightPool().free(ptr, stream_);
+            T* gpu_ptr = static_cast<T*>(CudaMemoryManager::getInstance().getWeightPool().allocate(total_size * sizeof(T), stream_));
+            gpu_data_ = std::shared_ptr<T>(gpu_ptr, [](T* ptr) {
+                CudaMemoryManager::getInstance().getWeightPool().free(ptr);
             });
-            CudaMemoryPoolManager::getInstance().getWeightPool().copyAsync(gpu_data_.get(), weight_data, total_size * sizeof(T), cudaMemcpyHostToDevice, stream_);
+            CudaMemoryManager::getInstance().getWeightPool().copyAsync(gpu_data_.get(), weight_data, total_size * sizeof(T), cudaMemcpyHostToDevice, stream_);
         } else {
             throw std::runtime_error("Unsupported device type");
         }
@@ -107,9 +107,9 @@ public:
         } else if (device_ == Device::CUDA) {
             std::vector<T> host_data(total_size_, value);
             if (tag_ == Usage::Weight) {
-                CudaMemoryPoolManager::getInstance().getWeightPool().copyAsync(gpu_data_.get(), host_data.data(), total_size_ * sizeof(T), cudaMemcpyHostToDevice, stream_);
+                CudaMemoryManager::getInstance().getWeightPool().copyAsync(gpu_data_.get(), host_data.data(), total_size_ * sizeof(T), cudaMemcpyHostToDevice, stream_);
             } else {
-                CudaMemoryPoolManager::getInstance().getBufferPool().copyAsync(gpu_data_.get(), host_data.data(), total_size_ * sizeof(T), cudaMemcpyHostToDevice, stream_);
+                CudaMemoryManager::getInstance().getBufferPool().copyAsync(gpu_data_.get(), host_data.data(), total_size_ * sizeof(T), cudaMemcpyHostToDevice, stream_);
             }
         }
     }
@@ -127,22 +127,22 @@ public:
         if (device_ == Device::CPU && new_device == Device::CUDA) {
             // CPU -> CUDA
             if (tag_ == Usage::Weight) {
-                CudaMemoryPoolManager::getInstance().getWeightPool().copyAsync(
+                CudaMemoryManager::getInstance().getWeightPool().copyAsync(
                     gpu_data_.get(), data_->data() + offset_, 
                     total_size_ * sizeof(T), cudaMemcpyHostToDevice, stream_);
             } else {
-                CudaMemoryPoolManager::getInstance().getBufferPool().copyAsync(
+                CudaMemoryManager::getInstance().getBufferPool().copyAsync(
                     gpu_data_.get(), data_->data() + offset_, 
                     total_size_ * sizeof(T), cudaMemcpyHostToDevice, stream_);
             }
         } else if (device_ == Device::CUDA && new_device == Device::CPU) {
             // CUDA -> CPU
             if (tag_ == Usage::Weight) {
-                CudaMemoryPoolManager::getInstance().getWeightPool().copyAsync(
+                CudaMemoryManager::getInstance().getWeightPool().copyAsync(
                     data_->data(), gpu_data_.get() + offset_, 
                     total_size_ * sizeof(T), cudaMemcpyDeviceToHost, stream_);
             } else {
-                CudaMemoryPoolManager::getInstance().getBufferPool().copyAsync(
+                CudaMemoryManager::getInstance().getBufferPool().copyAsync(
                     data_->data(), gpu_data_.get() + offset_, 
                     total_size_ * sizeof(T), cudaMemcpyDeviceToHost, stream_);
             }
@@ -165,7 +165,8 @@ public:
 
     Tensor<T> clone() const {
         // 创建一个新的空张量，具有相同形状和设备类型
-        Tensor<T> new_tensor(shape_, device_, tag_, stream_);
+        Tensor<T> new_tensor(shape_, device_, stream_);
+        new_tensor.tag_ = tag_; // 设置tag
         
         // 复制数据
         if (device_ == Device::CPU) {
@@ -173,11 +174,11 @@ public:
         } else if (device_ == Device::CUDA) {
             // 直接使用新张量已分配的内存
             if (tag_ == Usage::Weight) {
-                CudaMemoryPoolManager::getInstance().getWeightPool().copyAsync(
+                CudaMemoryManager::getInstance().getWeightPool().copyAsync(
                     new_tensor.gpu_data_.get(), gpu_data_.get(), 
                     total_size_ * sizeof(T), cudaMemcpyDeviceToDevice, stream_);
             } else {
-                CudaMemoryPoolManager::getInstance().getBufferPool().copyAsync(
+                CudaMemoryManager::getInstance().getBufferPool().copyAsync(
                     new_tensor.gpu_data_.get(), gpu_data_.get(), 
                     total_size_ * sizeof(T), cudaMemcpyDeviceToDevice, stream_);
             }

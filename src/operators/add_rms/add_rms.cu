@@ -65,9 +65,7 @@ __global__ void rms_norm_kernel_block_impl(const T* input, const T* weight, T* o
     const int threads_Num = blockDim.x;
     float input_storage[elementPerThread];
     float sum = 0.0f;
-    if (tid == 0) {
-        printf("sum = %f", sum);
-    }
+    
     int remaining_elements = dim_size - elementPerThread * (threads_Num - 1);
     // 方和
     if (tid < threads_Num - 1) {
@@ -84,8 +82,7 @@ __global__ void rms_norm_kernel_block_impl(const T* input, const T* weight, T* o
             sum += input_storage[i] * input_storage[i];
         }
     }   
-
-    typedef cub::BlockReduce<float, 1024> BlockReduce;
+    typedef cub::BlockReduce<float, 512> BlockReduce;
     __shared__ typename BlockReduce::TempStorage temp_storage;
     __shared__ float shared_sum;
     float block_sum = BlockReduce(temp_storage).Sum(sum);
@@ -94,6 +91,7 @@ __global__ void rms_norm_kernel_block_impl(const T* input, const T* weight, T* o
     }
     __syncthreads();
     float norm_factor = shared_sum;
+
     if (tid < threads_Num - 1) {
 #pragma unroll
         for (int i = 0; i < elementPerThread; i++) {
@@ -105,6 +103,7 @@ __global__ void rms_norm_kernel_block_impl(const T* input, const T* weight, T* o
             } else {
                 output[index] = static_cast<T>(input_storage[i] * norm_factor 
                     * static_cast<float>(weight[weight_index]));
+
             }
         }
     }
@@ -167,7 +166,7 @@ void dispatchAddRMSNormKernel(
             }
         }
     } else {
-        constexpr int BLOCK_SIZE = 1024;
+        constexpr int BLOCK_SIZE = 512;
         block = dim3(BLOCK_SIZE);
         grid = dim3(other_size);
         elementPerThread = min((dim_size + BLOCK_SIZE - 1) / BLOCK_SIZE, 32);
@@ -213,15 +212,18 @@ template <typename T>
 void AddRMSOperator<T>::forward(const Tensor<T>* input, const Tensor<T>* weight, Tensor<T>* output, const Tensor<T>* bias) {
     const float eps = 1e-6f;
     const int dim_size = static_cast<int>(input->shape()[input->shape().size() - 1]);
-    std::cout << "AddRMSNorm input shape: " << input->shape().size() << std::endl;
-    std::cout << "AddRMSNorm input shape: " << input->shape()[input->shape().size() - 1] << std::endl;
-    for (int i = 0; i < input->shape().size(); ++i) {
-        std::cout << "AddRMSNorm input shape: " << input->shape()[i] << std::endl;
+    std::cout << "Verifying pointers before kernel launch:" << std::endl;
+    std::cout << "Input ptr: " << input << " (null? " << (input == nullptr) << ")" << std::endl;
+    std::cout << "Weight ptr: " << weight << " (null? " << (weight == nullptr) << ")" << std::endl;
+    std::cout << "Output ptr: " << output << " (null? " << (output == nullptr) << ")" << std::endl;
+
+    // 如果使用了bias
+    if (bias) {
+        std::cout << "Bias ptr: " << bias << " (null? " << (bias == nullptr) << ")" << std::endl;
     }
     const int other_size = static_cast<int>(input->size() / dim_size);
     const int total_size = static_cast<int>(input->size());
     auto stream = input->getStream();
-    std::cout << "AddRMSNorm dim_size: " << dim_size << ", other_size: " << other_size << std::endl;
     if (dim_size < 1024) {
         //warp implementation
         dispatchAddRMSNormKernel(
@@ -231,6 +233,7 @@ void AddRMSOperator<T>::forward(const Tensor<T>* input, const Tensor<T>* weight,
     } else {
         // block implementation
         // 32 * 32 threads per block -> 1024 threads per block
+        std::cout << "Using block implementation" << std::endl;
         dispatchAddRMSNormKernel(
             input->data_ptr(), weight->data_ptr(), output->data_ptr(),
             eps, dim_size, other_size, false, stream, bias ? bias->data_ptr() : nullptr

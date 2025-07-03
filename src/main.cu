@@ -85,7 +85,9 @@ void cpu_add_rms_norm(const __nv_bfloat16* input, const __nv_bfloat16* weight, _
 
         // 2. 计算归一化因子 (1 / RMS)
         float norm_factor = 1.0f / sqrtf(ss / dim_size + eps);
-
+        if (i == 0) {
+            printf("RMS for row %d: %f\n", i, norm_factor);
+        }
         // 3. 归一化、缩放并可选地添加偏置
         for (int j = 0; j < dim_size; ++j) {
             float val = __bfloat162float(input[i * dim_size + j]);
@@ -101,7 +103,9 @@ void cpu_add_rms_norm(const __nv_bfloat16* input, const __nv_bfloat16* weight, _
         }
     }
 }
-
+__global__ void test_kernel(__nv_bfloat16* a) {
+    printf("output[0] = %f\n", __bfloat162float(a[0]));
+}
 int main() {
     using namespace infer;
 
@@ -109,7 +113,7 @@ int main() {
     constexpr int dim_size = 1024;
     cudaStream_t stream;
     cudaStreamCreate(&stream);
-    CudaMemoryPoolManager::getInstance().getBufferPool().initialize();
+    CudaMemoryManager::getInstance().getBufferPool().initialize();
     auto op = std::make_unique<UnifiedOp<__nv_bfloat16>>();
     OperatorRegistry::getInstance().listRegisteredOperators();
 
@@ -129,15 +133,31 @@ int main() {
     B.fill(__float2bfloat16(3));
     C.fill(__float2bfloat16(0));
 
+    A_cpu.fill(__float2bfloat16(2));
+    B_cpu.fill(__float2bfloat16(3));
+    C_cpu.fill(__float2bfloat16(0));
+    C_cpu_ref.fill(__float2bfloat16(0));
+          std::cout << "Input ptr: " << A.data_ptr() 
+          << ", Weight ptr: " << B.data_ptr() 
+          << ", Output ptr: " << C.data_ptr() << std::endl;
+    cudaGetLastError();
+    std::cout << "Executing RMS norm..." << std::endl;
     op->rms_norm(&A, &B, &C, nullptr);
-    cudaDeviceSynchronize(); // 等待 GPU 完成
 
-    initialize_data(A_cpu.data_ptr(), B_cpu.data_ptr(), other_size, 1, dim_size, false);
+    // cudaError_t err = cudaGetLastError();
+    // if (err != cudaSuccess) {
+    //     std::cerr << "CUDA error in RMS norm: " << cudaGetErrorString(err) << std::endl;
+    //     // 可以选择在错误时退出
+    //     return 1;
+    // }
+    //initialize_data(A_cpu.data_ptr(), B_cpu.data_ptr(), other_size, 1, dim_size, false);
     
     // 使用正确的 other_size 和 dim_size 调用
+
     cpu_add_rms_norm(A_cpu.data_ptr(), B_cpu.data_ptr(), C_cpu_ref.data_ptr(), other_size, dim_size, 1e-6f, nullptr);
     cudaStreamSynchronize(stream); 
-    CudaMemoryPoolManager::getInstance().getBufferPool().copyAsync(C_cpu.data_ptr(), C.data_ptr(), C.size() * sizeof(__nv_bfloat16), cudaMemcpyDeviceToHost, stream);
+    CudaMemoryManager::getInstance().getBufferPool().copyAsync(C_cpu.data_ptr(), C.data_ptr(), other_size * dim_size * sizeof(__nv_bfloat16), cudaMemcpyDeviceToHost, stream);
+    // cudaStreamSynchronize(stream); // 等待异步操作完成
     // Tensor<__nv_bfloat16> A({M, N}, Device::CUDA, "temporary", stream);
     // Tensor<__nv_bfloat16> B({N, K}, Device::CUDA, "temporary", stream);
     // Tensor<__nv_bfloat16> C({M, N}, Device::CUDA, "temporary", stream);
@@ -158,7 +178,9 @@ int main() {
     // 现在可以比较CPU和GPU的结果
     bool correct = true;
     for (int i = 0; i < other_size * dim_size; i++) {
+      
         float diff = fabs(__bfloat162float(C_cpu.data_ptr()[i]) - __bfloat162float(C_cpu_ref.data_ptr()[i]));
+
         if (diff > 1e-4) {
             correct = false;
             printf("Error at index %d: GPU=%.6f, CPU=%.6f, diff=%.6f\n", 

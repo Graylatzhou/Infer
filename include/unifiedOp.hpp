@@ -66,6 +66,9 @@ public:
 
     void rms_norm(const Tensor<T>* input, const Tensor<T>* weight, Tensor<T>* output, 
         const Tensor<T>* bias = nullptr) {
+        if (weight == nullptr || weight->data_ptr() == nullptr) {
+            throw std::runtime_error("RMS norm weight is null or its data pointer is null");
+        }
         auto op = OperatorFactory::getAddRMSOperator<T>();
         if (op) {
             op->forward(input, weight, output, bias);

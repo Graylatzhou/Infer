@@ -85,6 +85,7 @@ set_target_properties(infer PROPERTIES
 target_link_libraries(infer
     CUDA::cudart
     CUDA::cublas
+    CUDA::cuda_driver
 )
 
 target_include_directories(infer
@@ -104,6 +105,6 @@ endif()
 option(BUILD_MAIN "Build main executable" ON)
 if(BUILD_MAIN)
   add_executable(infer_app src/main.cu)
-  target_link_libraries(infer_app infer)
+  target_link_libraries(infer_app infer CUDA::cuda_driver)
   target_link_options(infer_app PRIVATE -rdynamic)
 endif()
