@@ -76,6 +76,15 @@ public:
             throw std::runtime_error("AddRMS operator not found");
         }
     }
+
+    void embedding(const Tensor<T>* input, const Tensor<T>* weight, Tensor<T>* output) {
+        auto op = OperatorFactory::getEmbeddingOperator<T>();
+        if (op) {
+            op->forward(input, weight, output);
+        } else {
+            throw std::runtime_error("Embedding operator not found");
+        }
+    }
 };
 }
 

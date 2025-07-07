@@ -180,7 +180,9 @@ int main() {
     for (int i = 0; i < other_size * dim_size; i++) {
       
         float diff = fabs(__bfloat162float(C_cpu.data_ptr()[i]) - __bfloat162float(C_cpu_ref.data_ptr()[i]));
-
+        if (i == 0) printf("GPU data[0] = %.6f, CPU data[0] = %.6f\n", 
+                __bfloat162float(C_cpu.data_ptr()[0]), 
+                __bfloat162float(C_cpu_ref.data_ptr()[0]));
         if (diff > 1e-4) {
             correct = false;
             printf("Error at index %d: GPU=%.6f, CPU=%.6f, diff=%.6f\n", 

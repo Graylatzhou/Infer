@@ -1,6 +1,6 @@
 #include "operators/matmul.hpp"
 
-namespace infer {
+
 
 #define CP_ASYNC_COMMIT_GROUP() asm volatile("cp.async.commit_group;\n" ::)
 #define CP_ASYNC_WAIT_ALL() asm volatile("cp.async.wait_all;\n" ::)
@@ -286,11 +286,92 @@ __global__ void gemm_mma_async_vectorized_kernel(const half *A, const half *B, h
   }
 }
 
+using namespace cute;
+template <typename T_, int BM_, int BN_, int BK_, int KStage_, int kSmemLayoutCBatch_>
+struct Config {
+  using T = T_;
+  static constexpr int BM = BM_;
+  static constexpr int BN = BN_;
+  static constexpr int BK = BK_;
+  static constexpr int KStage = KStage_;
+  static constexpr int kSmemLayoutCBatch = kSmemLayoutCBatch_;
+  using SmemLayoutAtom = decltype(composition(Swizzle<2, 3, 3>{}, 
+    make_layout(make_shape(Int<8>{}, Int<BK>{}), make_stride(Int<BK>{}, Int<1>{})))
+  );
+
+  using SmemLayoutA = decltype(tile_to_shape(
+    SmemLayoutAtom{}, 
+    make_shape(Int<BM>{}, Int<BK>{}, Int<KStage>{})));
+  using SmemLayoutB = decltype(tile_to_shape(
+    SmemLayoutAtom{}, 
+    make_shape(Int<BK>{}, Int<BN>{}, Int<KStage>{})));
+  
+  using mma_op = SM80_16x8x16_F32BF16BF16F32_TN;
+  using mma_traits = MMA_Traits<mma_op>;
+  using mma_atom = MMA_Atom<mma_traits>;
+  using MMA = decltype(make_tiled_mma(
+    mma_atom{}, // MMA_Atom
+    make_shape(Int<2>{}, Int<2>{}, Int<1>{}), // thr layout
+    make_shape(Int<32>{}, Int<32>{}, Int<16>{}) // Permutation
+  ));
+
+  // shared mem -> register
+  using s2r_copy_op = SM75_U32x4_LDSM_N;
+  using s2r_copy_traits = Copy_Traits<s2r_copy_op>;
+  using s2r_copy_atom = Copy_Atom<s2r_copy_traits>;
+  using S2RCopyA = s2r_copy_atom;
+  using S2RCopyB = s2r_copy_atom;
+
+  // global mem -> shared mem
+  using g2s_copy_op = SM80_CP_ASYNC_CACHEGLOBAL<cute::uint128_t>;
+  using g2s_copy_traits = Copy_Traits<g2s_copy_op>;
+  using g2s_copy_atom = Copy_Atom<g2s_copy_traits, T>;
+
+  using G2SCopyA = decltype(make_tiled_copy(
+    g2s_copy_atom{},
+    make_layout(make_shape(Int<32>{}, Int<4>{}), make_stride(Int<4>{}, Int<1>{})),
+    make_layout(make_shape(Int<1>{}, Int<8>{}))
+  ));  // MMA tiles loop over k for 2 times match global_tiled_copy layout
+
+  using G2SCopyB = G2SCopyA;
+
+  // define SmemLayoutC
+  using SmemLayoutAtomC = decltype(composition(
+    Swizzle<3, 3, 3>{},
+    make_layout(make_shape(Int<32>{}, Int<32>{}), make_stride(Int<32>{}, Int<1>{}))
+  ));
+
+  using SmemLayoutC = decltype(tile_to_shape(
+    SmemLayoutAtomC{},
+    make_shape(Int<32>{}, Int<32>{}, Int<kSmemLayoutCBatch>{})
+  ));
+
+  using R2SCopyAtomC = Copy_Atom<UniversalCopy<int>, T>;
+
+  using S2GCopyAtomC = Copy_Atom<UniversalCopy<cute::uint128_t>, T>;
+  using S2GCopyC = decltype(make_tiled_copy(
+    S2GCopyAtomC{},
+    make_layout(make_shape(Int<32>{}, Int<4>{}), make_stride(Int<4>{}, Int<1>{})),
+    make_layout(make_shape(Int<1>{}, Int<8>{}))
+  ));
+  
+  static constexpr int block_size = size(MMA{});
+  static constexpr int smem_size_AB = cute::cosize(SmemLayoutA{}) + cute::cosize(SmemLayoutB{});
+  static constexpr int smem_size_C = cute::cosize(SmemLayoutC{});
+
+  static constexpr int smem_size = cute::max(smem_size_AB, smem_size_C);
+};
+
+template <typename cf, typename Tdata>
+__global__ void gemm_cute_kernel(const Tdata* A, const Tdata* B, Tdata* C, int M, int N, int K) {
+
+}
+
 __global__ void print(const half* data) {
     printf("half data: %f\n", __half2float(data[0]));
     printf("half data: %f\n", __half2float(data[1]));
 }
-
+namespace infer {
 template <>
 void MatMulOperator<__nv_bfloat16>::forward(const Tensor<__nv_bfloat16>* A, const Tensor<__nv_bfloat16>* B, Tensor<__nv_bfloat16>* output, Tensor<__nv_bfloat16>* bias) {
     if (A->ndim() != 2 || B->ndim() != 2) {

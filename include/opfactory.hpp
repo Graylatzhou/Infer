@@ -8,6 +8,8 @@
 #include "operators/matmul.hpp"
 #include "operators/add.hpp"
 #include "operators/add_rms.hpp"
+#include "operators/embedding.hpp"
+#include "operators/flashattn.hpp"
 
 
 namespace infer {
@@ -22,6 +24,8 @@ public:
         REGISTER_OPERATOR(OperatorType::MUL, MUL, MulOperator, T);
         REGISTER_OPERATOR(OperatorType::ADD, ADD, AddOperator, T);
         REGISTER_OPERATOR(OperatorType::ADD_RMS_NORM, ADD_RMS_NORM, AddRMSOperator, T);
+        REGISTER_OPERATOR(OperatorType::EMBEDDING, EMBEDDING, EmbeddingOperator, T);
+        REGISTER_OPERATOR(OperatorType::FLASHATTENTION, FLASHATTENTION, FlashAttnOperator, T);
     }
 
     template<typename T>
@@ -57,6 +61,16 @@ public:
     template<typename T>
     static std::shared_ptr<AddRMSOperator<T>> getAddRMSOperator() {
         return OperatorRegistry::getInstance().getOperator<T, AddRMSOperator>(OperatorType::ADD_RMS_NORM, "ADD_RMS_NORM");
+    }
+
+    template<typename T>
+    static std::shared_ptr<EmbeddingOperator<T>> getEmbeddingOperator() {
+        return OperatorRegistry::getInstance().getOperator<T, EmbeddingOperator>(OperatorType::EMBEDDING, "EMBEDDING");
+    }
+
+    template<typename T>
+    static std::shared_ptr<FlashAttnOperator<T>> getFlashAttnOperator() {
+        return OperatorRegistry::getInstance().getOperator<T, FlashAttnOperator>(OperatorType::FLASHATTENTION, "FLASHATTENTION");
     }
 
 };

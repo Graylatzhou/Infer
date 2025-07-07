@@ -20,6 +20,7 @@ enum class OperatorType {
     MUL,
     ADD,
     ROPE,
+    EMBEDDING
 };
 
 // 支持的数据类型
