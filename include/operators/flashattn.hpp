@@ -1,5 +1,5 @@
 #pragma once
-#include "../operations.hpp"
+#include "../operator.hpp"
 #include "../tensor.hpp"
 #include "../opregistry.hpp"
 
@@ -12,7 +12,7 @@ public:
 
     OperatorType type() const override { return OperatorType::FLASHATTENTION; }
     std::string name() const override { return "FLASHATTENTION"; }
-}
+};
 template class infer::FlashAttnOperator<float>;
 template class infer::FlashAttnOperator<__nv_bfloat16>;
 }

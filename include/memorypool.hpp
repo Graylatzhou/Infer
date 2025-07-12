@@ -30,13 +30,6 @@ public:
             std::cerr << "Failed to get device ID: " << cudaGetErrorString(err) << std::endl;
             return false;
         }
-
-        // 打印CUDA版本信息
-        int runtimeVer = 0, driverVer = 0;
-        cudaRuntimeGetVersion(&runtimeVer);
-        cudaDriverGetVersion(&driverVer);
-        std::cout << "CUDA Runtime: " << runtimeVer/1000 << "." << (runtimeVer%100)/10 
-                  << ", Driver: " << driverVer/1000 << "." << (driverVer%100)/10 << std::endl;
         
         size_t free, total;
         err = cudaMemGetInfo(&free, &total);
@@ -71,11 +64,7 @@ public:
             size_t block_size = it->first;
             free_blocks_.erase(it);
             allocated_blocks_[ptr] = block_size;
-            
-            if (block_size >= 10*1024*1024) { // 只记录较大的分配
-                std::cout << "Memory Pool '" << name_ << "': Reusing " << (block_size/(1024*1024)) 
-                        << " MB at " << ptr << std::endl;
-            }
+        
             return ptr;
         }
 
@@ -94,12 +83,6 @@ public:
         
         allocated_blocks_[ptr] = size;
         total_size_ += size;
-        
-        if (size >= 10*1024*1024) { // 只记录较大的分配
-            std::cout << "Memory Pool '" << name_ << "': Allocated " << (size/(1024*1024)) 
-                    << " MB at " << ptr << ", total: " 
-                    << (total_size_/(1024*1024)) << " MB" << std::endl;
-        }
         
         return ptr;
     }
@@ -120,10 +103,6 @@ public:
         // 策略：小块直接释放，大块缓存起来以便重用
         if (size >= 1024*1024) { // 1MB以上缓存
             free_blocks_.insert(std::make_pair(size, ptr));
-            if (size >= 10*1024*1024) { // 只记录较大的释放
-                std::cout << "Memory Pool '" << name_ << "': Cached " << (size/(1024*1024)) 
-                        << " MB at " << ptr << std::endl;
-            }
         } else {
             cudaError_t err = cudaFree(ptr);
             if (err != cudaSuccess) {
@@ -136,11 +115,6 @@ public:
     }
 
     cudaError_t copyAsync(void* dst, const void* src, size_t size, cudaMemcpyKind kind, cudaStream_t stream = nullptr) {
-    // 基本参数验证
-    if (!dst || !src) {
-        std::cerr << "Error: Null pointer in copyAsync - dst: " << dst << ", src: " << src << std::endl;
-        return cudaErrorInvalidValue;
-    }
     
     if (size == 0) {
         return cudaSuccess; // 零大小复制视为成功
@@ -148,18 +122,6 @@ public:
     
     if (!initialized_ && !initialize(stream)) {
         return cudaErrorInitializationError;
-    }
-    
-    // 在复制前检查CUDA状态
-    cudaError_t pre_err = cudaGetLastError();
-    if (pre_err != cudaSuccess) {
-        std::cerr << "Warning: CUDA in error state before copyAsync: " << cudaGetErrorString(pre_err) << std::endl;
-        // 可以选择是否继续或返回错误
-    }
-    
-    // 确保之前的操作已完成
-    if (kind == cudaMemcpyDeviceToHost || kind == cudaMemcpyHostToDevice) {
-        cudaStreamSynchronize(stream ? stream : stream_);
     }
     
     cudaStream_t use_stream = stream ? stream : stream_;

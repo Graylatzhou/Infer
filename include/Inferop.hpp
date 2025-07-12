@@ -4,3 +4,5 @@
 #include "operators/softmax.hpp"
 #include "operators/silu.hpp"
 #include "operators/mul.hpp"
+#include "operators/embedding.hpp"
+#include "operators/flashattn.hpp"

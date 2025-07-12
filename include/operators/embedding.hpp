@@ -1,5 +1,5 @@
 #pragma once
-#include "../operations.hpp"
+#include "../operator.hpp"
 #include "../tensor.hpp"
 #include "../opregistry.hpp"
 
@@ -7,7 +7,7 @@ namespace infer {
 template <typename T>
 class EmbeddingOperator : public Operator {
 public: 
-    void forward(const Tensor<T>* input, const Tensor<T>* weight, Tensor<T>* output);
+    void forward(const Tensor<int32_t>* input, const Tensor<T>* weight, Tensor<T>* output);
 
     OperatorType type() const override { return OperatorType::EMBEDDING; }
     std::string name() const override { return "EMBEDDING"; }

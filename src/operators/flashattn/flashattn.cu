@@ -1,4 +1,4 @@
-#include "flashattn.hpp"
+#include "operators/flashattn.hpp"
 
 template <typename T>
 __global__ void flash_attn_cuda_kernelv1(const T* Q, const T* K, const T* V, T* output) {

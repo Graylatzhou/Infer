@@ -33,6 +33,7 @@ public:
     // tag分为weight和temporary两种
     Tensor(const std::vector<size_t>& shape, Device device, cudaStream_t stream = nullptr)
      : shape_(shape), device_(device), stream_(stream), tag_(Usage::Buffer) {
+        offset_ = 0;
         stride_.resize(shape.size());
         size_t total_size = 1;
         for (int i = shape.size() - 1; i >= 0; --i) {
@@ -57,6 +58,7 @@ public:
 
     Tensor (const std::vector<size_t>& shape, Device device, void* weight_data, cudaStream_t stream = nullptr)
     : shape_(shape), device_(device), stream_(stream), tag_(Usage::Weight) {
+        offset_ = 0;
         stride_.resize(shape.size());
         size_t total_size = 1;
         for (int i = shape.size() - 1; i >= 0; --i) {
@@ -79,6 +81,64 @@ public:
             throw std::runtime_error("Unsupported device type");
         }
     }
+    Tensor(const Tensor& other) : 
+    shape_(other.shape_),
+    stride_(other.stride_),
+    device_(other.device_),
+    offset_(other.offset_),
+    total_size_(other.total_size_),
+    tag_(other.tag_),
+    stream_(other.stream_)
+    {
+        if (device_ == Device::CPU) {
+            data_ = other.data_ ? std::make_shared<std::vector<T>>(*other.data_) : nullptr;
+            gpu_data_ = nullptr;
+        } else if (device_ == Device::CUDA) {
+            data_ = nullptr;
+            if (other.gpu_data_) {
+                // 为拷贝的对象分配新内存
+                T* gpu_ptr = nullptr;
+                if (tag_ == Usage::Weight) {
+                    gpu_ptr = static_cast<T*>(CudaMemoryManager::getInstance().getWeightPool().allocate(total_size_ * sizeof(T), stream_));
+                    CudaMemoryManager::getInstance().getWeightPool().copyAsync(
+                        gpu_ptr, other.gpu_data_.get(), total_size_ * sizeof(T), 
+                        cudaMemcpyDeviceToDevice, stream_);
+                } else {
+                    gpu_ptr = static_cast<T*>(CudaMemoryManager::getInstance().getBufferPool().allocate(total_size_ * sizeof(T), stream_));
+                    CudaMemoryManager::getInstance().getBufferPool().copyAsync(
+                        gpu_ptr, other.gpu_data_.get(), total_size_ * sizeof(T), 
+                        cudaMemcpyDeviceToDevice, stream_);
+                }
+                gpu_data_ = std::shared_ptr<T>(gpu_ptr, [tag=tag_](T* ptr) {
+                    if (tag == Usage::Weight) {
+                        CudaMemoryManager::getInstance().getWeightPool().free(ptr);
+                    } else {
+                        CudaMemoryManager::getInstance().getBufferPool().free(ptr);
+                    }
+                });
+                std::cout << "Copy constructed GPU tensor, new ptr: " << gpu_ptr << std::endl;
+            }
+        }
+    }
+    Tensor(Tensor&& other) noexcept :
+        shape_(std::move(other.shape_)),
+        stride_(std::move(other.stride_)),
+        device_(other.device_),
+        data_(std::move(other.data_)),
+        gpu_data_(std::move(other.gpu_data_)),  // 移动智能指针的所有权
+        offset_(other.offset_),
+        total_size_(other.total_size_),
+        tag_(other.tag_),
+        stream_(other.stream_)
+        {
+            // 清空源对象
+            other.gpu_data_ = nullptr;  // 确保不会重复释放
+            other.data_ = nullptr;
+            other.total_size_ = 0;
+            other.offset_ = 0;
+            
+            std::cout << "Move constructed tensor, ptr: " << gpu_data_.get() << std::endl;
+        }
 
     ~Tensor() {
 
@@ -88,6 +148,7 @@ public:
         if (device_ == Device::CPU) {
             return data_->data() + offset_;
         } else if (device_ == Device::CUDA) {
+            std::cout << "gpu_data_ pointer: " << gpu_data_.get() << std::endl;
             return gpu_data_.get() + offset_;
         }
         return nullptr;
@@ -97,6 +158,25 @@ public:
         if (device_ == Device::CPU) {
             return data_->data() + offset_;
         } else {
+            std::cout << "gpu_data_ pointer: " << gpu_data_.get() << std::endl;
+            return gpu_data_.get() + offset_;
+        }
+    }
+    
+    const void* void_ptr() const {
+        if (device_ == Device::CPU) {
+            return data_->data() + offset_;
+        } else {
+            std::cout << "gpu_data_ pointer: " << gpu_data_.get() << std::endl;
+            return gpu_data_.get() + offset_;
+        }
+    }
+
+    void* void_ptr() {
+        if (device_ == Device::CPU) {
+            return data_->data() + offset_;
+        } else {
+            std::cout << "gpu_data_ pointer: " << gpu_data_.get() << std::endl;
             return gpu_data_.get() + offset_;
         }
     }
@@ -151,15 +231,11 @@ public:
     }
 
     static Tensor<T> Buffer(const std::vector<size_t> shape, Device device, cudaStream_t stream = nullptr) {
-        Tensor<T> tensor(shape, device, stream);
-        tensor.tag_ = Usage::Buffer;
-        return tensor;
+        return Tensor<T>(shape, device, stream);
     }
 
     static Tensor<T> Weight(const std::vector<size_t> shape, Device device, void* data, cudaStream_t stream = nullptr) {
-        Tensor<T> tensor(shape, device, data, stream);
-        tensor.tag_ = Usage::Weight;
-        return tensor;
+        return Tensor<T>(shape, device, data, stream);
     }
 
 
@@ -252,6 +328,10 @@ public:
         permuted_tensor.shape_ = new_shape;
         permuted_tensor.stride_ = new_stride;
         return permuted_tensor;
+    }
+
+    void set_tag(Usage tag) {
+        tag_ = tag;
     }
 
 private:
