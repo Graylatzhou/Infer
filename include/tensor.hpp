@@ -148,7 +148,6 @@ public:
         if (device_ == Device::CPU) {
             return data_->data() + offset_;
         } else if (device_ == Device::CUDA) {
-            std::cout << "gpu_data_ pointer: " << gpu_data_.get() << std::endl;
             return gpu_data_.get() + offset_;
         }
         return nullptr;
@@ -158,7 +157,7 @@ public:
         if (device_ == Device::CPU) {
             return data_->data() + offset_;
         } else {
-            std::cout << "gpu_data_ pointer: " << gpu_data_.get() << std::endl;
+           
             return gpu_data_.get() + offset_;
         }
     }
@@ -167,7 +166,7 @@ public:
         if (device_ == Device::CPU) {
             return data_->data() + offset_;
         } else {
-            std::cout << "gpu_data_ pointer: " << gpu_data_.get() << std::endl;
+
             return gpu_data_.get() + offset_;
         }
     }
@@ -176,7 +175,7 @@ public:
         if (device_ == Device::CPU) {
             return data_->data() + offset_;
         } else {
-            std::cout << "gpu_data_ pointer: " << gpu_data_.get() << std::endl;
+            
             return gpu_data_.get() + offset_;
         }
     }
@@ -328,6 +327,21 @@ public:
         permuted_tensor.shape_ = new_shape;
         permuted_tensor.stride_ = new_stride;
         return permuted_tensor;
+    }
+
+    void copy_data(void* src_ptr, size_t size, cudaMemcpyKind kind = cudaMemcpyDeviceToDevice) const {
+        if (device_ == Device::CPU) {
+            memcpy(data_->data(), src_ptr, size);
+        } else if (device_ == Device::CUDA) {
+            if (tag_ == Usage::Weight) {
+                CudaMemoryManager::getInstance().getWeightPool().copyAsync(
+                    gpu_data_.get(), src_ptr, total_size_, kind, stream_);
+            } else {
+                CudaMemoryManager::getInstance().getBufferPool().copyAsync(
+                    gpu_data_.get(), src_ptr, total_size_, kind, stream_);
+            }
+        }
+
     }
 
     void set_tag(Usage tag) {

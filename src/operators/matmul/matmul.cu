@@ -291,7 +291,7 @@ template <typename T, int BM, int BN, int BK, int kStage, typename TiledMMA,
           typename SmemLayoutB, typename SmemLayoutC, typename S2RCopyAtomA,
           typename S2RCopyAtomB, typename R2SCopyAtomC, typename S2GCopyAtomC,
           typename S2GCopyC, const bool BlockSwizzle>
-__global__ void hgemm_mma_stages_block_swizzle_tn_cute_kernel(const void *Aptr, const void *Bptr,
+__global__ void cutlass_mma_stages_block_swizzle_tn_kernel(const void *Aptr, const void *Bptr,
                                                               void *Dptr, int m,
                                                               int n, int k) {
   using namespace cute;
@@ -664,13 +664,13 @@ void launch_hgemm_mma_stages_block_swizzle_tn_cute(const void *a, const void *b,
 #endif
 
   cudaFuncSetAttribute(
-      hgemm_mma_stages_block_swizzle_tn_cute_kernel<
+      cutlass_mma_stages_block_swizzle_tn_kernel<
           T, BM, BN, BK, KStage, MMA, G2SCopyA, G2SCopyB, SmemLayoutA,
           SmemLayoutB, SmemLayoutC, S2RCopyAtomA, S2RCopyAtomB, R2SCopyAtomC,
           S2GCopyAtomC, S2GCopyC, BlockSwizzle>,
       cudaFuncAttributeMaxDynamicSharedMemorySize, shm_size);
 
-  hgemm_mma_stages_block_swizzle_tn_cute_kernel<
+  cutlass_mma_stages_block_swizzle_tn_kernel<
       T, BM, BN, BK, KStage, MMA, G2SCopyA, G2SCopyB, SmemLayoutA, SmemLayoutB,
       SmemLayoutC, S2RCopyAtomA, S2RCopyAtomB, R2SCopyAtomC, S2GCopyAtomC,
       S2GCopyC, BlockSwizzle><<<grid, block, shm_size, stream>>>(a, b, c, M, N, K);

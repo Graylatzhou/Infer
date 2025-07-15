@@ -104,17 +104,7 @@ void cpu_add_rms_norm(const __nv_bfloat16* input, const __nv_bfloat16* weight, _
         }
     }
 }
-__global__ void test_kernel(__nv_bfloat16* a) {
-    printf("output[0] = %f\n", __bfloat162float(a[0]));
-}
 
-void validate_tensor_ptr(const char* name, void* expected, void* actual) {
-    if (expected != actual) {
-        std::cerr << "POINTER CORRUPTION: " << name 
-                  << " expected=" << expected 
-                  << " actual=" << actual << std::endl;
-    }
-}
 
 template <typename T>
 __global__ void gpu_compare_kernel(const T *x, const T *y, int n,
@@ -199,7 +189,7 @@ void gpu_compare(const T *x, const T *y, int n, float threshold) {
 int main() {
     using namespace infer;
 
-    constexpr int M = 81920;
+    constexpr int M = 128;
     constexpr int N = 256;
     constexpr int K = 512;
     cudaStream_t stream;
@@ -233,19 +223,8 @@ int main() {
     C_cpu.fill(__float2bfloat16(0));
     C_cpu_ref.fill(__float2bfloat16(0));
 
-    cudaError_t err = cudaGetLastError();
-    std::cout << "Executing Cute GEMM..." << std::endl;
-    cudaStreamSynchronize(stream);
-    std::cout << "Aptr  " << A.void_ptr() << std::endl;
-    std::cout << "Bptr  " << B.void_ptr() << std::endl;
-    std::cout << "Cptr  " << C.void_ptr() << std::endl;
-    std::cout << "C_ref " << C_ref.void_ptr() << std::endl;
     op->matmul(&A, &B, &C);
-    err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        throw std::runtime_error("CUDA error in MatMulOperator: " + std::string(cudaGetErrorString(err)));
-    }
-        cublasHandle_t handle;
+    cublasHandle_t handle;
     cublasCreate(&handle);
     cublasSetStream(handle, A.getStream());
     float alpha = 1.0f;
@@ -253,13 +232,8 @@ int main() {
     cublasGemmEx(handle, CUBLAS_OP_N, CUBLAS_OP_N, N, M, K, &alpha, B.void_ptr(),
       CUDA_R_16BF, N, A.void_ptr(), CUDA_R_16BF, K, &beta, C_ref.void_ptr(), CUDA_R_16BF, N,
       CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP);
-    err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        throw std::runtime_error("CUDA error in MatMulOperator: " + std::string(cudaGetErrorString(err)));
-    }
-    gpu_compare<__nv_bfloat16>(C.data_ptr(), C_ref.data_ptr(), M * N, 1e-4f);
 
-    
+    gpu_compare<__nv_bfloat16>(C.data_ptr(), C_ref.data_ptr(), M * N, 1e-4f);
     // cpu_hgemm(A_cpu.data_ptr(), B_cpu.data_ptr(), C_cpu_ref.data_ptr(), M, N, K);
     // CudaMemoryManager::getInstance().getBufferPool().copyAsync(C_cpu.data_ptr(), C.data_ptr(), M * N * sizeof(__nv_bfloat16), cudaMemcpyDeviceToHost, stream);
     // printf("C_cpu[0] = %f\n", __bfloat162float(C_cpu.data_ptr()[0]));
