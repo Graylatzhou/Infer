@@ -145,7 +145,6 @@ void KVCachePool<T>::prefetch_sequence(size_t sequence_id, size_t initial_length
     
     // 检查序列是否已存在
     if (sequence_caches_.find(sequence_id) != sequence_caches_.end()) {
-        // 已存在，调用扩展方法
         extend_sequence(sequence_id, initial_length);
         return;
     }
@@ -261,8 +260,7 @@ void KVCachePool<T>::resize_cache_tensors(SequenceCacheInfo& cache_info, size_t 
             
             // 复制旧数据
             size_t copy_size = std::min(cache_info.allocated_length, new_length);
-            
-            // 设置复制区域
+
             std::vector<size_t> copy_shape = {
                 copy_size,
                 config_.num_heads,
