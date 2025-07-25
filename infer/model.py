@@ -1,0 +1,3 @@
+
+# 模型通过context管理上下文kvcache等序列关系，在每次计算前set，保证传入的positions是绝对位置
+# 以及之后的prefill decode使用的是绝对位置

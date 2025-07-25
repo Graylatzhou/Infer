@@ -36,14 +36,31 @@ __global__ void add_kernel(const T* input1, const T* input2, T* output, int size
     }
 }
 
-
-namespace infer {
-template <typename T>
-void AddOperator<T>::forward(const Tensor<T>* a, const Tensor<T>* b, Tensor<T>* output) {
-    int size = a->size();
+void add_impl(const torch::Tensor& a, const torch::Tensor& b, torch::Tensor& output) {
+    int size = a.numel();
     int blockSize = 256;
     int numBlocks = (size + blockSize - 1) / blockSize;
-    add_kernel<T, 4><<<numBlocks, blockSize, 0, a->getStream()>>>(a->data_ptr(), b->data_ptr(), output->data_ptr(), size);
+
+    const c10::cuda::OptionalCUDAGuard device_guard(a.device());
+    auto stream = at::cuda::getCurrentCUDAStream();
+
+    if (a.dtype() == torch::kBFloat16) {
+        add_kernel<__nv_bfloat16, 4><<<numBlocks, blockSize, 0, stream>>>(reinterpret_cast<const __nv_bfloat16*>(a.data_ptr()), reinterpret_cast<const __nv_bfloat16*>(b.data_ptr()), reinterpret_cast<__nv_bfloat16*>(output.data_ptr()), size);
+    } else if (a.dtype() == torch::kFloat32) {
+        add_kernel<float, 4><<<numBlocks, blockSize, 0, stream>>>(reinterpret_cast<const float*>(a.data_ptr()), reinterpret_cast<const float*>(b.data_ptr()), reinterpret_cast<float*>(output.data_ptr()), size);
+    } else {
+        throw std::runtime_error("Unsupported data type for addition");
+    }
 }
 
-}
+// namespace infer {
+
+// template <typename T>
+// void AddOperator<T>::forward(const Tensor<T>* a, const Tensor<T>* b, Tensor<T>* output) {
+//     int size = a->size();
+//     int blockSize = 256;
+//     int numBlocks = (size + blockSize - 1) / blockSize;
+//     add_kernel<T, 4><<<numBlocks, blockSize, 0, a->getStream()>>>(a->data_ptr(), b->data_ptr(), output->data_ptr(), size);
+// }
+
+// }

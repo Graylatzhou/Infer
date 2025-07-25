@@ -1,7 +1,5 @@
 #include "operators/matmul.hpp"
 
-
-
 #define CP_ASYNC_COMMIT_GROUP() asm volatile("cp.async.commit_group;\n" ::)
 #define CP_ASYNC_WAIT_ALL() asm volatile("cp.async.wait_all;\n" ::)
 #define CP_ASYNC_WAIT_GROUP(n)                                                 \
@@ -493,7 +491,7 @@ template <typename T, const int Stages = 2, const bool BlockSwizzle = false>
 void launch_hgemm_mma_stages_block_swizzle_tn_cute(const void *a, const void *b, void *c, int M,
                                                    int N, int K,
                                                    int swizzle_stride,
-                                                   cudaStream_t stream) {
+                                                   c10::cuda::CUDAStream stream) {
   using namespace cute;
 
   auto BM = Int<128>{};
@@ -676,60 +674,78 @@ void launch_hgemm_mma_stages_block_swizzle_tn_cute(const void *a, const void *b,
       S2GCopyC, BlockSwizzle><<<grid, block, shm_size, stream>>>(a, b, c, M, N, K);
 }
 
+void matmul_impl(const torch::Tensor& input, const torch::Tensor& weight, torch::Tensor& output) {
+    TORCH_CHECK(input.device() == weight.device(), "Input and weight must be on the same device.");
+    
+    // Get dimensions
+    int M = input.size(0);
+    int K = input.size(1);
+    int N = weight.size(1);
+
+    c10::cuda::OptionalCUDAGuard device_guard(input.device());
+    auto stream = at::cuda::getCurrentCUDAStream();
+
+    // Launch the kernel
+    launch_hgemm_mma_stages_block_swizzle_tn_cute<cute::bfloat16_t, 3, false>(
+        input.data_ptr(), weight.data_ptr(), output.data_ptr(),
+        M, N, K, 1024, stream);
+}
+
+
 __global__ void print(const half* data) {
     printf("half data: %f\n", __half2float(data[0]));
     printf("half data: %f\n", __half2float(data[1]));
 }
-namespace infer {
-template <>
-void MatMulOperator<__nv_bfloat16>::forward(const Tensor<__nv_bfloat16>* A, const Tensor<__nv_bfloat16>* B, Tensor<__nv_bfloat16>* output, Tensor<__nv_bfloat16>* bias) {
-    if (A->ndim() != 2 || B->ndim() != 2) {
-        throw std::runtime_error("Both input tensors must be 2D matrices.");
-    }
-    int M = A->shape()[0];
-    int N = B->shape()[0];
-    int K = A->shape()[1];
-    launch_hgemm_mma_stages_block_swizzle_tn_cute<cute::bfloat16_t, 3, false>(
-        A->void_ptr(), B->void_ptr(), output->void_ptr(), M, N, K, 1024, A->getStream());
+// namespace infer {
+// template <>
+// void MatMulOperator<__nv_bfloat16>::forward(const Tensor<__nv_bfloat16>* A, const Tensor<__nv_bfloat16>* B, Tensor<__nv_bfloat16>* output, Tensor<__nv_bfloat16>* bias) {
+//     if (A->ndim() != 2 || B->ndim() != 2) {
+//         throw std::runtime_error("Both input tensors must be 2D matrices.");
+//     }
+//     int M = A->shape()[0];
+//     int N = B->shape()[0];
+//     int K = A->shape()[1];
+//     launch_hgemm_mma_stages_block_swizzle_tn_cute<cute::bfloat16_t, 3, false>(
+//         A->void_ptr(), B->void_ptr(), output->void_ptr(), M, N, K, 1024, A->getStream());
 
-}
-template <typename T>
-MatMulOperator<T>::MatMulOperator() {
-    // 初始化 cuBLAS 句柄
-    cublasCreate(&handle_);
-}
+// }
+// template <typename T>
+// MatMulOperator<T>::MatMulOperator() {
+//     // 初始化 cuBLAS 句柄
+//     cublasCreate(&handle_);
+// }
 
-template <typename T>
-MatMulOperator<T>::~MatMulOperator() {
-    if (handle_) {
-        cublasDestroy(handle_);
-        handle_ = nullptr;
-    }
-}
+// template <typename T>
+// MatMulOperator<T>::~MatMulOperator() {
+//     if (handle_) {
+//         cublasDestroy(handle_);
+//         handle_ = nullptr;
+//     }
+// }
 
 
-template <>
-void MatMulOperator<float>::forward(const Tensor<float>* A, const Tensor<float>* B, Tensor<float>* output, Tensor<float>* bias) {
-    if (A->ndim() != 2 || B->ndim() != 2) {
-        throw std::runtime_error("Both input tensors must be 2D matrices.");
-    }
+// template <>
+// void MatMulOperator<float>::forward(const Tensor<float>* A, const Tensor<float>* B, Tensor<float>* output, Tensor<float>* bias) {
+//     if (A->ndim() != 2 || B->ndim() != 2) {
+//         throw std::runtime_error("Both input tensors must be 2D matrices.");
+//     }
 
-    int m = A->shape()[0];
-    int n = B->shape()[1];
-    int k = A->shape()[1];
+//     int m = A->shape()[0];
+//     int n = B->shape()[1];
+//     int k = A->shape()[1];
     
-    cublasSetStream(handle_, A->getStream());
-    cublasSetMathMode(handle_, CUBLAS_DEFAULT_MATH);
+//     cublasSetStream(handle_, A->getStream());
+//     cublasSetMathMode(handle_, CUBLAS_DEFAULT_MATH);
     
   
-    static float alpha = 1.0;
-    static float beta = 0.0;
+//     static float alpha = 1.0;
+//     static float beta = 0.0;
   
-    cublasGemmEx(handle_, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, &alpha, B->data_ptr(), CUDA_R_32F,
-                 n, A->data_ptr(), CUDA_R_32F, k, &beta, output->data_ptr(), CUDA_R_32F, n, CUBLAS_COMPUTE_32F,
-                 CUBLAS_GEMM_DEFAULT);
+//     cublasGemmEx(handle_, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, &alpha, B->data_ptr(), CUDA_R_32F,
+//                  n, A->data_ptr(), CUDA_R_32F, k, &beta, output->data_ptr(), CUDA_R_32F, n, CUBLAS_COMPUTE_32F,
+//                  CUBLAS_GEMM_DEFAULT);
     
-}
+// }
 
-}
+// }
 

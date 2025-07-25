@@ -88,7 +88,7 @@ __global__ void flash_attention_v2_kernel(const T* Q, const T* K, const T* V, T*
     uint32_t load_smem_Q_ptr = smem_Q_base_ptr + (load_smem_Q_Br * (128 + Pads) + load_smem_Q_hd) * sizeof(T); // bytes
     #pragma unroll
     for (int i = 0; i < 128 / (128 / Br); i += 8) {
-      CP_ASYNC_CA(load_smem_Q_ptr + i * 2, &Q[load_gmem_Q_addr + i], 16);
+      CP_ASYNC_CG(load_smem_Q_ptr + i * 2, &Q[load_gmem_Q_addr + i], 16);
     }
     CP_ASYNC_COMMIT_GROUP();
   }
@@ -104,7 +104,7 @@ __global__ void flash_attention_v2_kernel(const T* Q, const T* K, const T* V, T*
       #pragma unroll
       for (int j = 0; j < 128 / (128 / Bc); j += 8)
       {
-        CP_ASYNC_CA(load_smem_K_ptr + j * 2, &K[load_gmem_K_addr + j], 16);
+        CP_ASYNC_CG(load_smem_K_ptr + j * 2, &K[load_gmem_K_addr + j], 16);
       }
       CP_ASYNC_COMMIT_GROUP();
     }
@@ -128,7 +128,7 @@ __global__ void flash_attention_v2_kernel(const T* Q, const T* K, const T* V, T*
         #pragma unroll
         for (int i = 0; i < 128 / (128 / Bc); i += 8)
         {
-          CP_ASYNC_CA(load_smem_V_ptr + i * 2, &V[load_gmem_V_addr + i], 16);
+          CP_ASYNC_CG(load_smem_V_ptr + i * 2, &V[load_gmem_V_addr + i], 16);
         }
         CP_ASYNC_COMMIT_GROUP();
       }
@@ -142,7 +142,7 @@ __global__ void flash_attention_v2_kernel(const T* Q, const T* K, const T* V, T*
         #pragma unroll
         for (int i = 0; i < 128 / (128 / Bc); i += 8)
         {
-          CP_ASYNC_CA(load_smem_K_ptr + i * 2, &K[load_gmem_K_addr + i], 16);
+          CP_ASYNC_CG(load_smem_K_ptr + i * 2, &K[load_gmem_K_addr + i], 16);
         }
         CP_ASYNC_COMMIT_GROUP();
       }
@@ -264,41 +264,97 @@ __global__ void flash_attention_v2_kernel(const T* Q, const T* K, const T* V, T*
   }
 }
 
+__host__ __inline__ int div_ceil(int a, int b) { return (a % b != 0) ? (a / b + 1) : (a / b); }
+void flash_attn_prefill_impl(const torch::Tensor& Q, const torch::Tensor& K, 
+                             const torch::Tensor& V, torch::Tensor& O) {
+  // 确保输入输出tensor在同一设备上
+  TORCH_CHECK(Q.device().is_cuda() && K.device().is_cuda() && V.device().is_cuda() && O.device().is_cuda(),
+              "All tensors must be on the same CUDA device.");
+  
 
-namespace infer {
-// 单batch
-// Q_weight
-template <typename T>
-void FlashAttnOperator<T>::forward(const Tensor<T>* Q, const Tensor<T>* K, const Tensor<T>* V, Tensor<T>* output) {
-    const int B = Q->shape()[0];
-    const int nh = Q->shape()[1];
-    const int seq_len = Q->shape()[2];
-    const int head_dim = Q->shape()[3];
+  int Bnh = Q.size(0);
+  int seq_len = Q.size(1);
+  int head_dim = Q.size(2);
 
-    const int Pads = 8;                // padding size
-    const int Bc = 32;                 // K/V 分块大小
-    const int Br = 32;                 // Q 分块大小
-    const int Tc = (seq_len + Bc - 1) / Bc;  // K/V 分块数量
-    const int Tr = (seq_len + Br - 1) / Br;  // Q 分块数量
-    constexpr int Q_tile_size = Br * (128 + Pads); 
-    constexpr int K_tile_size = Bc * (128 + Pads);
+  c10::cuda::OptionalCUDAGuard device_guard(Q.device());
+  auto stream = at::cuda::getCurrentCUDAStream();
 
-    const float softmax_scale = 1.0f / sqrtf(static_cast<float>(head_dim));
-    
-    const int smem_size = (Q_tile_size + K_tile_size * 2 + K_tile_size) * sizeof(__nv_bfloat16) + Br * Bc * sizeof(float);
+  const int Pads = 8;                // padding size
+  const int Bc = 32;                 // K/V 分块大小
+  const int Br = 32;                 // Q 分块大小
+  const int Tc = (seq_len + Bc - 1) / Bc;  // K/V 分块数量
+  const int Tr = (seq_len + Br - 1) / Br;  // Q 分块数量
+  constexpr int Q_tile_size = Br * (128 + Pads); 
+  constexpr int K_tile_size = Bc * (128 + Pads);
 
-    // (seq_len, batch * num_heads)
-    dim3 grid(div_ceil(seq_len, Br), B * nh);
-    dim3 block(128); // 4/8 warps per block
-    // 启动kernel
-    cudaFuncSetAttribute(flash_attention_v2_kernel<__nv_bfloat16, Br, Bc, 2, 5, 8>, 
-                                  cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size);
-    flash_attention_v2_kernel<__nv_bfloat16, Br, Bc, 2, 5, 8><<<grid, block, smem_size>>>(
+  const float softmax_scale = 1.0f / sqrtf(static_cast<float>(head_dim));
+
+  // (seq_len, batch * num_heads)
+  dim3 grid(div_ceil(seq_len, Br), Bnh);
+  dim3 block(128); // 4/8 warps per block
+  // 启动kernel
+  if (seq_len > 256) {
+    const int smem_size = (Q_tile_size + K_tile_size * 3 + K_tile_size) * sizeof(__nv_bfloat16) + Br * Bc * sizeof(float);
+    cudaFuncSetAttribute(flash_attention_v2_kernel<__nv_bfloat16, Br, Bc, 3, 5, 8>, 
+                                cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size);
+    flash_attention_v2_kernel<__nv_bfloat16, Br, Bc, 3, 5, 8><<<grid, block, smem_size, stream>>>(
         reinterpret_cast<__nv_bfloat16*>(Q.data_ptr()),
         reinterpret_cast<__nv_bfloat16*>(K.data_ptr()),
         reinterpret_cast<__nv_bfloat16*>(V.data_ptr()),
         reinterpret_cast<__nv_bfloat16*>(O.data_ptr()),
-        nh, nh, seq_len, softmax_scale
+        nh, nh, seq_len, softmax_scale, 0, 0
     );
+  } else {
+    const int smem_size = (Q_tile_size + K_tile_size * 2 + K_tile_size) * sizeof(__nv_bfloat16) + Br * Bc * sizeof(float);
+    cudaFuncSetAttribute(flash_attention_v2_kernel<__nv_bfloat16, Br, Bc, 2, 5, 8>, 
+                                cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size);
+    flash_attention_v2_kernel<__nv_bfloat16, Br, Bc, 2, 5, 8><<<grid, block, smem_size, stream>>>(
+        reinterpret_cast<__nv_bfloat16*>(Q.data_ptr()),
+        reinterpret_cast<__nv_bfloat16*>(K.data_ptr()),
+        reinterpret_cast<__nv_bfloat16*>(V.data_ptr()),
+        reinterpret_cast<__nv_bfloat16*>(O.data_ptr()),
+        nh, nh, seq_len, softmax_scale, 0, 0
+    );
+  }
+  
+
 }
-}
+
+
+// namespace infer {
+// // 单batch
+// // Q_weight
+// template <typename T>
+// void FlashAttnOperator<T>::forward(const Tensor<T>* Q, const Tensor<T>* K, const Tensor<T>* V, Tensor<T>* output) {
+//     const int B = Q->shape()[0];
+//     const int nh = Q->shape()[1];
+//     const int seq_len = Q->shape()[2];
+//     const int head_dim = Q->shape()[3];
+
+//     const int Pads = 8;                // padding size
+//     const int Bc = 32;                 // K/V 分块大小
+//     const int Br = 32;                 // Q 分块大小
+//     const int Tc = (seq_len + Bc - 1) / Bc;  // K/V 分块数量
+//     const int Tr = (seq_len + Br - 1) / Br;  // Q 分块数量
+//     constexpr int Q_tile_size = Br * (128 + Pads); 
+//     constexpr int K_tile_size = Bc * (128 + Pads);
+
+//     const float softmax_scale = 1.0f / sqrtf(static_cast<float>(head_dim));
+    
+//     const int smem_size = (Q_tile_size + K_tile_size * 2 + K_tile_size) * sizeof(__nv_bfloat16) + Br * Bc * sizeof(float);
+
+//     // (seq_len, batch * num_heads)
+//     dim3 grid(div_ceil(seq_len, Br), B * nh);
+//     dim3 block(128); // 4/8 warps per block
+//     // 启动kernel
+//     cudaFuncSetAttribute(flash_attention_v2_kernel<__nv_bfloat16, Br, Bc, 2, 5, 8>, 
+//                                   cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size);
+//     // flash_attention_v2_kernel<__nv_bfloat16, Br, Bc, 2, 5, 8><<<grid, block, smem_size>>>(
+//     //     reinterpret_cast<__nv_bfloat16*>(Q.data_ptr()),
+//     //     reinterpret_cast<__nv_bfloat16*>(K.data_ptr()),
+//     //     reinterpret_cast<__nv_bfloat16*>(V.data_ptr()),
+//     //     reinterpret_cast<__nv_bfloat16*>(output.data_ptr()),
+//     //     nh, nh, seq_len, softmax_scale, 0, 0
+//     // );
+// }
+// }

@@ -16,3 +16,7 @@ public:
 template class infer::FlashAttnOperator<float>;
 template class infer::FlashAttnOperator<__nv_bfloat16>;
 }
+
+void flash_attn_prefill_impl(const torch::Tensor& Q, const torch::Tensor& K, 
+                             const torch::Tensor& V, torch::Tensor& O);
+

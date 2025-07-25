@@ -6,3 +6,5 @@
 #include "operators/mul.hpp"
 #include "operators/embedding.hpp"
 #include "operators/flashattn.hpp"
+#include "operators/add_rms.hpp"
+

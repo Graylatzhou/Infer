@@ -16,3 +16,7 @@ public:
 template class infer::SiluOperator<float>;
 template class infer::SiluOperator<__nv_bfloat16>;
 }
+
+void silu_impl(torch::Tensor& output, const torch::Tensor& input);
+void silu_and_mul(torch::Tensor& out,    // [..., d]
+                  torch::Tensor& input);  // [..., 2 * d]

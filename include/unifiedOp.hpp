@@ -1,6 +1,7 @@
 #pragma once
 #include "opfactory.hpp"
 #include "tensor.hpp"
+#include <torch/extension.h> 
 namespace infer {
 template <typename T>
 class UnifiedOp {
@@ -83,6 +84,16 @@ public:
             op->forward(input, weight, output);
         } else {
             throw std::runtime_error("Embedding operator not found");
+        }
+    }
+
+    void attention(const Tensor<T>* Q, const Tensor<T>* K, const Tensor<T>* V, 
+        Tensor<T>* output) {
+        auto op = OperatorFactory::getFlashAttnOperator<T>();
+        if (op) {
+            op->forward(Q, K, V, output);
+        } else {
+            throw std::runtime_error("FlashAttn operator not found");
         }
     }
 };

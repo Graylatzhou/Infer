@@ -175,22 +175,23 @@ __global__ void Softmax_block_impl(const T* x, T* y, int stride, int dimsize, in
 
 template <typename T>
 void dispatchSoftmaxKernel(
-    const void *x, void *y,
+    const T *x, T *y,
     int stride, int dim_size, int other_size,
-    void *stream, bool use_warp_impl) {
+    c10::cuda::CUDAStream stream, bool use_warp_impl) {
 
     int elemPerThread;
     dim3 grid, block;
 
     if (use_warp_impl) {
+        printf("Using warp implementation for dim_size <= 1024\n");
         block = dim3(32, 32);
         grid = dim3((other_size + block.y - 1) / block.y, 1, 1);
         elemPerThread = min((dim_size + 31) / 32, 32);
 
 #define LAUNCH_WARP_KERNEL(ELEM_PER_THREAD)                           \
     Softmax_warp_impl<ELEM_PER_THREAD, 32, 32, T>                     \
-        <<<grid, block, 0, reinterpret_cast<cudaStream_t>(stream)>>>( \
-            reinterpret_cast<const T *>(x), reinterpret_cast<T *>(y), \
+        <<<grid, block, 0, stream>>>( \
+            x, y, \
             stride, dim_size, other_size)
 
         if (elemPerThread <= 1) {
@@ -210,6 +211,7 @@ void dispatchSoftmaxKernel(
 #undef LAUNCH_WARP_KERNEL
 
     } else {
+        printf("Using block implementation for dim_size > 1024\n");
         // Block implementation for dim_size > 1024
         constexpr int BLOCK_SIZE = 1024;
         block = dim3(BLOCK_SIZE);
@@ -218,8 +220,8 @@ void dispatchSoftmaxKernel(
 
 #define LAUNCH_BLOCK_KERNEL(ELEM_PER_THREAD)                          \
     Softmax_block_impl<ELEM_PER_THREAD, BLOCK_SIZE, T>                \
-        <<<grid, block, 0, reinterpret_cast<cudaStream_t>(stream)>>>( \
-            reinterpret_cast<const T *>(x), reinterpret_cast<T *>(y), \
+        <<<grid, block, 0, stream>>>( \
+            x, y, \
             stride, dim_size, other_size)
 
         if (elemPerThread <= 1) {
@@ -238,11 +240,16 @@ void dispatchSoftmaxKernel(
 
 #undef LAUNCH_BLOCK_KERNEL
     }
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        std::cerr << "CUDA error in softmax kernel: " << cudaGetErrorString(err) << std::endl;
+        throw std::runtime_error("CUDA error in softmax kernel");
+    }
 }
 
 
 template <typename T>
-void softmax_dispatch(void* y, const void* x, int size, int dim_size, int other_size, int stride, void* stream) {
+void softmax_dispatch(T* y, const T* x, int64_t size, int64_t dim_size, int64_t other_size, int64_t stride, c10::cuda::CUDAStream stream) {
     if (dim_size <= 1024) {
         dispatchSoftmaxKernel<T>(
             x, y, stride, dim_size, other_size, stream, true);
@@ -254,16 +261,36 @@ void softmax_dispatch(void* y, const void* x, int size, int dim_size, int other_
     }
 }
 
-namespace infer {
-template <typename T>
-void SoftmaxOperator<T>::forward(Tensor<T>* input0, Tensor<T>* output, int32_t axis) {
-    int size = static_cast<int>(input0->size());
-    int stride = 0;
-    int dim_size = static_cast<int>(input0->shape()[axis]);
-    for (int i = axis + 1; i < input0->ndim(); i++) {
-        stride *= static_cast<int>(input0->shape()[i]);
+void softmax_impl(torch::Tensor& output, const torch::Tensor& input, int64_t axis) {
+    int64_t size = input.numel();
+    int64_t stride = 1;
+    int64_t dim_size = input.size(axis);
+    for (int64_t i = axis + 1; i < input.dim(); i++) {
+        stride *= input.size(i);
     }
-    int other_size = size / dim_size;
-    softmax_dispatch<T>(output->data_ptr(), input0, size, dim_size, other_size, stride, output->getStream());
+    int64_t other_size = size / dim_size;
+
+    const c10::cuda::OptionalCUDAGuard device_guard(input.device());
+    auto stream = at::cuda::getCurrentCUDAStream();
+    if (input.scalar_type() == torch::kFloat32) {
+        softmax_dispatch<float>(reinterpret_cast<float*>(output.data_ptr()), reinterpret_cast<const float*>(input.data_ptr()), size, dim_size, other_size, stride, stream);
+    } else if (input.scalar_type() == torch::kBFloat16) {
+        softmax_dispatch<__nv_bfloat16>(reinterpret_cast<__nv_bfloat16*>(output.data_ptr()), reinterpret_cast<const __nv_bfloat16*>(input.data_ptr()), size, dim_size, other_size, stride, stream);
+    } else {
+        throw std::runtime_error("Unsupported data type for softmax operation.");
+    }
 }
-}
+
+// namespace infer {
+// template <typename T>
+// void SoftmaxOperator<T>::forward(Tensor<T>* input0, Tensor<T>* output, int32_t axis) {
+//     int size = static_cast<int>(input0->size());
+//     int stride = 0;
+//     int dim_size = static_cast<int>(input0->shape()[axis]);
+//     for (int i = axis + 1; i < input0->ndim(); i++) {
+//         stride *= static_cast<int>(input0->shape()[i]);
+//     }
+//     int other_size = size / dim_size;
+//     softmax_dispatch<T>(output->data_ptr(), input0, size, dim_size, other_size, stride, output->getStream());
+// }
+// }
