@@ -111,66 +111,82 @@ def add_test():
     else:
         print("Add test failed: The outputs do not match!")
 
+'''
+Input tensor dim_size: 128, other_size: 384
+Input tensor dim_size: 128, other_size: 96
+Input tensor dim_size: 2560, other_size: 12
+'''
 def test_realistic_data_ranges():
-    """使用真实的数据范围测试 RMS Norm，包含 bias 测试"""
+    """使用随机偶数维度的形状测试 RMS Norm 20 次，包含 bias 测试"""
     
-    # 模拟真实 LLM 中的数据分布
-    batch_size, seq_len, hidden_size = 1, 32, 4096
-    
-    input_tensor = torch.randn(batch_size, seq_len, hidden_size, device='cuda', dtype=torch.bfloat16) * 2.0
-    input_tensor = torch.clamp(input_tensor, -2.0, 2.0)
-    
-    weight = torch.normal(mean=1.0, std=0.3, size=(hidden_size,), device='cuda', dtype=torch.bfloat16)
-    weight = torch.clamp(weight, 0.1, 3.0)
-    
-    # ✅ 修复：创建 bias 张量
-    bias = torch.normal(mean=0.0, std=0.1, size=(hidden_size,), device='cuda', dtype=torch.bfloat16)
-    bias = torch.clamp(bias, -0.5, 0.5)
-    
-    output = torch.empty_like(input_tensor)
-    eps = 1e-6
-    
-    print(f"=== 真实数据范围测试（包含 bias）===")
-    print(f"Input 范围: [{input_tensor.min().item():.3f}, {input_tensor.max().item():.3f}]")
-    print(f"Input 标准差: {input_tensor.std().item():.3f}")
-    print(f"Weight 范围: [{weight.min().item():.3f}, {weight.max().item():.3f}]")
-    print(f"Weight 均值: {weight.mean().item():.3f}")
-    print(f"Bias 范围: [{bias.min().item():.3f}, {bias.max().item():.3f}]")
-    print(f"Bias 均值: {bias.mean().item():.3f}")
-    # 测试带 bias 的版本
+    generated_shapes = set()
+    num_tests = 20
+    passed_count = 0
 
-    # 参考实现
-    def reference_rms_norm_with_bias(x, weight, bias=None, eps=1e-6):
-        variance = x.pow(2).mean(dim=-1, keepdim=True)
-        x_normed = x * torch.rsqrt(variance + eps)
-        result = x_normed * weight
-        if bias is not None:
-            result = result + bias
-        return result
-    
-    # 计算期望输出
-    expected_output_with_bias = reference_rms_norm_with_bias(input_tensor, weight, bias, eps)
+    print(f"\n=== 运行 {num_tests} 次随机形状 RMS Norm 测试 ===")
+    import random
+    for i in range(num_tests):
+        # 1. 生成不重复的随机偶数维度
+        while True:
+            # 生成一些典型的偶数维度
+            batch_size = random.randint(1, 4) * 2
+            seq_len = random.randint(1, 64) * 2
+            num_heads = random.randint(1, 16) * 2
+            hidden_size = random.randint(16, 512) * 2
+            
+            shape = (batch_size, seq_len, num_heads, hidden_size)
+            if shape not in generated_shapes:
+                generated_shapes.add(shape)
+                break
+        
+        print(f"\n--- Test {i+1}/{num_tests}: Shape={shape} ---")
 
-    try:
-        infer_ops.rms_norm(input_tensor, weight, output, bias, eps)
-        print("✅ 带 bias 的 RMS Norm 调用成功")
-    except Exception as e:
-        print(f"❌ 带 bias 的 RMS Norm 调用失败: {e}")
-        return False
-    
-    
-    print(f"\n=== 输出统计 ===")
-    print(f"带 bias 输出范围: [{output.min().item():.3f}, {output.max().item():.3f}]")
-    print(f"期望带 bias 范围: [{expected_output_with_bias.min().item():.3f}, {expected_output_with_bias.max().item():.3f}]")
-    
-    # 测试1：带 bias 的 RMS Norm
-    print(f"\n=== 测试1：带 bias 的 RMS Norm ===")
-    is_pass_with_bias = debug_tensor_comparison(
-        output, expected_output_with_bias, 
-        atol=1e-2, rtol=1e-2, 
-        name="RMS Norm with Bias"
-    )
-    
+        # 2. 创建张量
+        input_tensor = torch.randn(shape, device='cuda', dtype=torch.bfloat16) * 2.0
+        input_tensor = torch.clamp(input_tensor, -2.0, 2.0)
+        
+        weight = torch.normal(mean=1.0, std=0.3, size=(hidden_size,), device='cuda', dtype=torch.bfloat16)
+        weight = torch.clamp(weight, 0.1, 3.0)
+        
+        bias = torch.normal(mean=0.0, std=0.1, size=(hidden_size,), device='cuda', dtype=torch.bfloat16)
+        bias = torch.clamp(bias, -0.5, 0.5)
+        
+        output = torch.empty_like(input_tensor)
+        eps = 1e-6
+
+        # 3. 参考实现 (使用 float32 以获得更精确的参考值)
+        def reference_rms_norm_with_bias(x, weight, bias=None, eps=1e-6):
+            x_f32 = x.to(torch.float32)
+            variance = x_f32.pow(2).mean(dim=-1, keepdim=True)
+            x_normed = x_f32 * torch.rsqrt(variance + eps)
+            result = x_normed.to(x.dtype) * weight
+            if bias is not None:
+                result = result + bias
+            return result
+        
+        expected_output_with_bias = reference_rms_norm_with_bias(input_tensor, weight, bias, eps)
+
+        # 4. 调用 CUDA op
+        try:
+            infer_ops.rms_norm(input_tensor, weight, output, bias, eps)
+        except Exception as e:
+            print(f"❌ Test {i+1} FAILED on call: {e}")
+            continue
+
+        # 5. 对比结果
+        is_pass_with_bias = debug_tensor_comparison(
+            output, expected_output_with_bias, 
+            atol=1e-2, rtol=1e-2, 
+            name=f"RMS Norm with Bias (Shape: {shape})"
+        )
+        
+        if is_pass_with_bias:
+            passed_count += 1
+
+    print(f"\n{'='*60}")
+    print(f"随机形状 RMS Norm 测试总结: {passed_count}/{num_tests} 通过.")
+    print(f"{'='*60}")
+
 
 
 def simple_rms_norm_test():
@@ -207,9 +223,11 @@ def matmul_test():
     a = torch.randn((32 * 32, 4096), device='cuda', dtype=torch.bfloat16)
     b = torch.randn((4096, 4096), device='cuda', dtype=torch.bfloat16)
     c = torch.empty((32 * 32, 4096), device='cuda', dtype=torch.bfloat16)
+    c1 = torch.empty_like(c)
 
     # 使用 infer_ops 中的 matmul 算子
-    infer_ops.matmul(a, b, c)
+    # infer_ops.matmul(a, b, c)
+    # plan.run()
 
     # 使用 PyTorch 的内置 matmul 验证结果
     c1 = a @ b.T
@@ -431,13 +449,13 @@ if __name__ == "__main__":
     # print("Running simple RMS Norm test...")
     # simple_rms_norm_test()
     
-    print("\n" + "="*60)
-    print("Running full RMS Norm test...")
-    test_realistic_data_ranges()
-
     # print("\n" + "="*60)
-    # print("Running MatMul test...")
-    # matmul_test()
+    # print("Running full RMS Norm test...")
+    # test_realistic_data_ranges()
+
+    print("\n" + "="*60)
+    print("Running MatMul test...")
+    matmul_test()
 
     # print("\n" + "="*60)
     # print("Running Embedding test...")

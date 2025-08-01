@@ -161,6 +161,11 @@ void rotary_embedding(
                 "query, key and positions must have the same number of tokens");
   }
   if (positions_ndim == 2) {
+	printf("positions.size(0): %ld, positions.size(1): %ld\n", positions.size(0), positions.size(1));
+	printf("query.size(0): %ld, query.size(1): %ld\n", query.size(0), query.size(1));
+	printf("key.has_value(): %d, key->size(0): %ld, key->size(1): %ld\n",
+		   key.has_value(), key.has_value() ? key->size(0) : 0,
+		   key.has_value() ? key->size(1) : 0);
     TORCH_CHECK(
         query.size(0) == positions.size(0) &&
             (!key.has_value() || key->size(0) == positions.size(0)) &&

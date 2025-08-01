@@ -37,6 +37,17 @@ __global__ void rms_norm_kernel_warp_impl(const T* input, const T* weight, T* ou
     float sum = 0.0f;
     int base_ptr = other_idx * dim_size + tid;
     __shared__ float shared_sum[32];
+    // if (blockIdx.x == 0 && threadIdx.y == 0 && threadIdx.x == 0) {
+    //   printf("CUDA Debug: dim_size=%d, other_size=%d, eps=%f\n", dim_size, other_size, eps);
+    //   printf("First few input values: %.6f, %.6f, %.6f\n", 
+    //           __bfloat162float(input[0]), 
+    //           __bfloat162float(input[1]), 
+    //           __bfloat162float(input[2]));
+    //   printf("First few weight values: %.6f, %.6f, %.6f\n",
+    //           __bfloat162float(weight[0]),
+    //           __bfloat162float(weight[1]),
+    //           __bfloat162float(weight[2]));
+    // }
     for (int i = 0; tid + i * blockDim.x < dim_size; i++) {
         input_storage[i] = __bfloat162float(input[base_ptr + i * blockDim.x]);
         sum += input_storage[i] * input_storage[i];
@@ -56,6 +67,12 @@ __global__ void rms_norm_kernel_warp_impl(const T* input, const T* weight, T* ou
                 * __bfloat162float(weight[tid + i * blockDim.x]));
         }
     }
+    // if (blockIdx.x == 0 && threadIdx.y == 0 && threadIdx.x == 0) {
+    //   printf("First few output values: %.6f, %.6f, %.6f\n",
+    //            __bfloat162float(output[0]),
+    //            __bfloat162float(output[1]),
+    //            __bfloat162float(output[2]));
+    // }
 }   
 
 template<typename T, int elementPerThread, bool add_bias=false>
@@ -67,23 +84,20 @@ __global__ void rms_norm_kernel_block_impl(const T* input, const T* weight, T* o
     float input_storage[elementPerThread];
     float sum = 0.0f;
     
-    int remaining_elements = dim_size - elementPerThread * (threads_Num - 1);
-    // 方和
-    if (tid < threads_Num - 1) {
-#pragma unroll
-        for (int i = 0; i < elementPerThread; i++) {
-            int index = other_idx * dim_size + tid * elementPerThread + i;
-            input_storage[i] = __bfloat162float(input[index]);
-            sum += input_storage[i] * input_storage[i];
-        }
-    } else { //余数处理部分 
-        for (int i = 0; i < remaining_elements; i++) {
-            int index = other_idx * dim_size + tid * elementPerThread + i;
-            input_storage[i] = __bfloat162float(input[index]);
-            sum += input_storage[i] * input_storage[i];
-        }
-    }   
-    typedef cub::BlockReduce<float, 512> BlockReduce;
+  // #pragma unroll
+  //   for (int i = 0; i < elementPerThread; i++) {
+  //       int index = other_idx * dim_size + tid * elementPerThread + i;
+  //       input_storage[i] = __bfloat162float(input[index]);
+  //       sum += input_storage[i] * input_storage[i];
+  //   }
+    #pragma unroll
+    for (int i = 0; tid + i * threads_Num < dim_size; i++) {
+      int index = other_idx * dim_size + tid + i * threads_Num;
+      input_storage[i] = __bfloat162float(input[index]);
+      sum += input_storage[i] * input_storage[i];
+    }
+
+    typedef cub::BlockReduce<float, 1024> BlockReduce;
     __shared__ typename BlockReduce::TempStorage temp_storage;
     __shared__ float shared_sum;
     float block_sum = BlockReduce(temp_storage).Sum(sum);
@@ -93,32 +107,17 @@ __global__ void rms_norm_kernel_block_impl(const T* input, const T* weight, T* o
     __syncthreads();
     float norm_factor = shared_sum;
 
-    if (tid < threads_Num - 1) {
 #pragma unroll
-        for (int i = 0; i < elementPerThread; i++) {
-            int index = other_idx * dim_size + tid * elementPerThread + i;
-            int weight_index = tid * elementPerThread + i;
-            if constexpr (add_bias) {
-                output[index] = __float2bfloat16(input_storage[i] * norm_factor 
-                    * __bfloat162float(weight[weight_index]) + __bfloat162float(bias[weight_index]));
-            } else {
-                output[index] = __float2bfloat16(input_storage[i] * norm_factor 
-                    * __bfloat162float(weight[weight_index]));
-            }
-        }
-    }
-    else { //余数处理部分 
-        for (int i = 0; i < remaining_elements; i++) {
-            int index = other_idx * dim_size + tid * elementPerThread + i;
-            int weight_index = tid * elementPerThread + i;
-            if constexpr (add_bias) {
-                output[index] = __float2bfloat16(input_storage[i] * norm_factor 
-                    * __bfloat162float(weight[weight_index]) + __bfloat162float(bias[weight_index]));
-            } else {
-                output[index] = __float2bfloat16(input_storage[i] * norm_factor 
-                    * __bfloat162float(weight[weight_index]));
-            }
-        }
+    for (int i = 0; i * threads_Num + tid < dim_size; i++) {
+      int index = other_idx * dim_size + tid + i * threads_Num;
+      int weight_index = tid + i * threads_Num;
+      if constexpr (add_bias) {
+          output[index] = __float2bfloat16(input_storage[i] * norm_factor 
+              * __bfloat162float(weight[weight_index]) + __bfloat162float(bias[weight_index]));
+      } else {
+          output[index] = __float2bfloat16(input_storage[i] * norm_factor 
+              * __bfloat162float(weight[weight_index]));
+      }
     }
 }
 
@@ -135,7 +134,8 @@ void dispatchAddRMSNormKernel(
         block = dim3(32, 32);
         grid = dim3((other_size + block.y - 1) / block.y, 1, 1);
         elementPerThread = min((dim_size + 31) / 32, 32);
-        std::cout << "Using warp implementation with elementPerThread: " << elementPerThread << std::endl;
+        // 128 + 31 / 32 = 4
+        // 96 + 31 / 32 = 3
         if (bias) {
             if (elementPerThread <= 1) {
                 rms_norm_kernel_warp_impl<T, 1, true><<<grid, block, 0, stream>>>(input, weight, output, eps, dim_size, other_size, bias);
@@ -166,12 +166,10 @@ void dispatchAddRMSNormKernel(
             }
         }
     } else {
-        constexpr int BLOCK_SIZE = 512;
+        constexpr int BLOCK_SIZE = 1024;
         block = dim3(BLOCK_SIZE);
         grid = dim3(other_size);
         elementPerThread = min((dim_size + BLOCK_SIZE - 1) / BLOCK_SIZE, 32);
-        std::cout << "elementPerThread: " << elementPerThread << std::endl;
-        std::cout << "Block Impl" << std::endl;
         if (bias) {
             if (elementPerThread <= 1) {
                 rms_norm_kernel_block_impl<T, 1, true><<<grid, block, 0, stream>>>(input, weight, output, eps, dim_size, other_size, bias);
@@ -549,30 +547,34 @@ void rms_norm_impl(
         TORCH_CHECK(bias_tensor.is_cuda(), "Bias tensor must be on a CUDA device");
         TORCH_CHECK(bias_tensor.scalar_type() == torch::kBFloat16, "Bias must be of type BFloat16");
         TORCH_CHECK(bias_tensor.size(-1) == last_dim_size, "Bias and weight must have the same size");
-        bias_ptr = static_cast<T*>(bias_tensor.data_ptr());
+        bias_ptr = reinterpret_cast<const T*>(bias_tensor.data_ptr());
     }
 
     // 2. 获取维度信息
     const int dim_size = static_cast<int>(last_dim_size);
     const int other_size = static_cast<int>(input.numel() / dim_size);
-
-
     const c10::cuda::OptionalCUDAGuard device_guard(input.device());
     auto stream = at::cuda::getCurrentCUDAStream();
 
     // 5. 决定使用哪种实现并调用分发函数
     bool use_warp_impl = (dim_size < 1024);
     dispatchAddRMSNormKernel<T>(
-        reinterpret_cast<__nv_bfloat16*>(input.data_ptr()),
-        reinterpret_cast<__nv_bfloat16*>(weight.data_ptr()),
+        reinterpret_cast<const __nv_bfloat16*>(input.data_ptr()),
+        reinterpret_cast<const __nv_bfloat16*>(weight.data_ptr()),
         reinterpret_cast<__nv_bfloat16*>(output.data_ptr()),
         static_cast<float>(eps),
+
         dim_size,
         other_size,
         use_warp_impl,
         stream,
         bias_ptr
     );
+
+  cudaError_t err = cudaGetLastError();
+  if (err != cudaSuccess) {
+      throw std::runtime_error("CUDA error in rms_norm kernel: " + std::string(cudaGetErrorString(err)));
+  }
 }
 
 

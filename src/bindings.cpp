@@ -20,7 +20,6 @@ TORCH_LIBRARY(_C, m) {  // ✅ 直接使用 _C 而不是 TORCH_EXTENSION_NAME
       "rms_norm_vllm(Tensor! result, Tensor input, Tensor weight, float epsilon) -> "
       "()");
     m.def("silu_and_mul(Tensor! result, Tensor input) -> ()");
-    
 }
 
 TORCH_LIBRARY_IMPL(_C, CUDA, m) { 

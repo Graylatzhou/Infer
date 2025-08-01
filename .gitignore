@@ -6,3 +6,7 @@
 /infer_ops/__pycache__/
 /infer_ops/*.so
 /home/zzw/Cute-Learning/Infer/modeling_qwen2.py
+/infer/engine/__pycache__
+/infer/ops/__pycache__
+/infer/utils/__pycache__
+/
