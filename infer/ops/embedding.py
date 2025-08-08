@@ -1,25 +1,32 @@
-from CustomOp import CustomOp
 import torch
-from infer_ops import embedding
+from torch import nn
 from typing import Optional
+import torch.nn.functional as F
+from infer.context import get_context
 
-class Embedding(CustomOp):
+class Embedding(torch.nn.Module):
     def __init__(self, num_embeddings: int, embedding_dim: int) -> None:
         super().__init__()
         self.num_embeddings = num_embeddings
         self.embedding_dim = embedding_dim
-        self.weight = torch.nn.Parameter(torch.empty(num_embeddings, embedding_dim))
-        self.weight.weight_loader = self.weight_loader
+        self.weight = torch.nn.Parameter(torch.empty(num_embeddings, embedding_dim, dtype=torch.bfloat16))
 
-    def weight_loader():
-        pass
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        y = F.embedding(input, self.weight)
+        return y
 
-    def forward_native(self, input: torch.Tensor) -> torch.Tensor:
-        y = torch.empty(input.shape[0], self.embedding_dim, device=input.device, dtype=self.weight.dtype)
-        embedding.embedding(input, self.weight, y)
-        return y
-    
-    def forward_cuda(self, input: torch.Tensor) -> torch.Tensor:
-        y = torch.empty(input.shape[0], self.embedding_dim, device=input.device, dtype=self.weight.dtype)
-        embedding.embedding_cuda(input, self.weight, y)
-        return y
+class LMHead(Embedding):
+    def __init__(
+        self,
+        num_embeddings: int,
+        embedding_dim: int,
+	):
+        super().__init__(num_embeddings, embedding_dim)
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        context = get_context()
+        if context.is_prefill:
+            last_indices = context.cu_seqlens_q[1:] - 1
+            input = input[last_indices].contiguous()
+        logits = F.linear(input, self.weight)
+        return logits

@@ -5,4 +5,5 @@
 /infer_ops.egg-info/
 /infer_ops/__pycache__/
 /infer_ops/*.so
-/home/zzw/Cute-Learning/Infer/modeling_qwen2.py
+./Infer/test_transformer.py
+./Infer/test_trition_kernel.py

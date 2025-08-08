@@ -30,15 +30,6 @@ __device__ __forceinline__ T silu_kernel_vllm(const T& x) {
   return (T)(((float)x) / (1.0f + expf((float)-x)));
 }
 
-template <typename T>
-__device__ __forceinline__ T gelu_kernel_vllm(const T& x) {
-  // Equivalent to PyTorch GELU with 'none' approximation.
-  // Refer to:
-  // https://github.com/pytorch/pytorch/blob/8ac9b20d4b090c213799e81acf48a55ea8d437d6/aten/src/ATen/native/cuda/ActivationGeluKernel.cu#L36-L38
-  const float f = (float)x;
-  constexpr float ALPHA = M_SQRT1_2;
-  return (T)(f * 0.5f * (1.0f + ::erf(f * ALPHA)));
-}
 
 #define LAUNCH_ACTIVATION_GATE_KERNEL(KERNEL, ACT_FIRST)                 \
   int d = input.size(-1) / 2;                                            \

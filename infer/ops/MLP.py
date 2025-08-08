@@ -1,4 +1,3 @@
-from CustomOp import CustomOp
 import torch
 from infer_ops import matmul, silu_and_mul
 from typing import Optional
@@ -93,7 +92,8 @@ def debug_tensor_comparison(output, expected, atol=1e-3, rtol=1e-3, name="tensor
     print(f"torch.allclose 结果: {'✅ PASS' if is_close else '❌ FAIL'}")
     
     return is_close
-class Linear(CustomOp):
+
+class Linear(torch.nn.Module):
     def __init__(
         self,
         in_features: int,
@@ -104,17 +104,16 @@ class Linear(CustomOp):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
-        self.weight = torch.nn.Parameter(
-            torch.randn((self.out_features, self.in_features)) * 0.1)
-        self.weight.weight_loader = self.weight_loader
+
+        self.weight = torch.nn.Parameter(torch.empty((int(out_features), in_features), dtype=dtype, device=torch.device("cuda")))
+        
         if bias:
-            self.bias = torch.nn.Parameter(torch.empty(self.out_features))
-            self.bias.weight_loader = self.weight_loader
+            self.bias = torch.nn.Parameter(torch.empty(int(out_features), dtype=dtype, device=torch.device("cuda")))
         else:
             self.register_parameter("bias", None)
-    
 
-    def weight_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor):
+    @staticmethod
+    def weight_loader(param: torch.nn.Parameter, loaded_weight: torch.Tensor):
         param.data.copy_(loaded_weight)
 
     def forward_native(
@@ -131,14 +130,66 @@ class Linear(CustomOp):
         self,
         input: torch.Tensor,
     ) -> torch.Tensor:
-        out = torch.empty((input.shape[0], self.out_features), dtype=self.weight.dtype, device=input.device)
+        shape = input.shape[:-1] + (self.out_features,)
+        out = torch.empty(shape, dtype=self.weight.dtype, device=input.device)
         matmul(
             input,
             self.weight.t(),
             out
         )
         return out
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        return self.forward_native(input)
+
     
+class QKVLinear(Linear):
+    def __init__(
+        self,
+        hidden_size: int,
+        q_size: int,
+        kv_size: int,
+        bias: bool = False,
+    ) -> None:
+        self.hidden_size = hidden_size
+        self.q_size = q_size
+        self.kv_size = kv_size
+        super().__init__(hidden_size, q_size + 2 * kv_size, bias=bias)
+
+    @staticmethod
+    def weight_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, shared_id: str):
+        assert shared_id in ["q", "k", "v"]
+        if shared_id == "q":
+            shared_size = self.q_size
+            shared_offset = 0
+        elif shared_id == 'k':
+            shared_size = self.kv_size  
+            shared_offset = self.q_size
+        else:
+            shared_size = self.kv_size  
+            shared_offset = self.q_size + self.kv_size
+        '''
+        tensor.narrow 是 PyTorch 中用于从张量中提取一个窄条（子集）的方法。
+        它沿着指定的维度提取连续的一段数据
+        tensor.narrow(dim, start, length)
+        '''
+        param.data.narrow(0, int(shared_offset), int(shared_size)).copy_(loaded_weight)
+
+class MergeLinear(Linear):
+    def __init__(
+        self,
+        hidden_size: int,
+        output_size: list[int],
+    ):
+        self.output_size = output_size
+        super().__init__(hidden_size, sum(output_size), bias=False)
+
+    @staticmethod
+    def weight_loader(self, param: torch.nn.Parameter, loaded_weight: torch.Tensor, loaded_shard_id: int):
+        shared_offset = 0 if loaded_shard_id == 0 else self.output_size[0]
+        shared_size = self.output_size[loaded_shard_id]
+        param.data.narrow(0, shared_offset, shared_size).copy_(loaded_weight)
+        
 
 '''
 SwiGLU
@@ -155,18 +206,17 @@ class MLP(torch.nn.Module):
     ) -> None:
         super().__init__()
         self.intermediate_size = intermediate_size
-        self.fc1 = Linear(hidden_size, intermediate_size * 2)
-        self.fc2 = Linear(intermediate_size, hidden_size)
+        self.gate_up_proj = MergeLinear(hidden_size, [intermediate_size] * 2)
+        self.down_proj = Linear(intermediate_size, hidden_size)
         self.act_fn = silu_and_mul
-        self.prefix = prefix
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.fc1(x)
-        act_output = torch.empty((x.numel() // x.size(-1), self.intermediate_size), dtype=x.dtype, device=x.device)
+        x = self.gate_up_proj(x)
+        output_shape = x.shape[:-1] + (self.intermediate_size,)
+        act_output = torch.empty(output_shape, dtype=x.dtype, device=x.device)
         self.act_fn(act_output, x)
-        x = self.fc2(act_output)
+        x = self.down_proj(act_output)
         return x
-    
 
 class TorchMLP(torch.nn.Module):
     def __init__(self, hidden_size: int, intermediate_size: int):

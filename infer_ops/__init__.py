@@ -25,6 +25,7 @@ try:
     add = torch.ops._C.add
     rms_norm = torch.ops._C.rms_norm
     rms_norm_vllm = torch.ops._C.rms_norm_vllm
+    rms_norm_fused = torch.ops._C.fused_add_rms_norm
     matmul = torch.ops._C.matmul
     embedding = torch.ops._C.embedding
     flash_attn_prefill = torch.ops._C.flash_attn_prefill

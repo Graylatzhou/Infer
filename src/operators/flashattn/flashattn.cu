@@ -73,8 +73,9 @@ __global__ void flash_attention_v2_kernel(const T* Q, const T* K, const T* V, T*
   // Q br dimension = tile_id * tile_size + partial location
   int load_gmem_Q_Br = Q_tile_id * Br + load_smem_Q_Br;
   if (load_gmem_Q_Br >= seq_len) return;
+  int kv_head_id = QKV_head_id / (nh_q / nh_kv);
   int load_gmem_Q_offset = (QKV_batch_id * nh_q + QKV_head_id) * seq_len * 128;
-  int load_gmem_KV_offset = (QKV_batch_id * nh_kv + QKV_head_id) * seq_len * 128;
+  int load_gmem_KV_offset = (QKV_batch_id * nh_kv + kv_head_id) * seq_len * 128;
 
   uint32_t smem_Q_base_ptr = __cvta_generic_to_shared(Q_tile_smem);
   uint32_t smem_K_base_ptr = __cvta_generic_to_shared(K_tile_smem);
@@ -270,11 +271,13 @@ void flash_attn_prefill_impl(const torch::Tensor& Q, const torch::Tensor& K,
   // 确保输入输出tensor在同一设备上
   TORCH_CHECK(Q.device().is_cuda() && K.device().is_cuda() && V.device().is_cuda() && O.device().is_cuda(),
               "All tensors must be on the same CUDA device.");
-  
 
-  int Bnh = Q.size(0);
+  int Batch = Q.size(0);
   int seq_len = Q.size(1);
-  int head_dim = Q.size(2);
+  int num_heads = Q.size(2);
+  int head_dim = Q.size(3);
+
+  int num_heads_kv = K.size(2);
 
   c10::cuda::OptionalCUDAGuard device_guard(Q.device());
   auto stream = at::cuda::getCurrentCUDAStream();
@@ -290,7 +293,7 @@ void flash_attn_prefill_impl(const torch::Tensor& Q, const torch::Tensor& K,
   const float softmax_scale = 1.0f / sqrtf(static_cast<float>(head_dim));
 
   // (seq_len, batch * num_heads)
-  dim3 grid(div_ceil(seq_len, Br), Bnh);
+  dim3 grid(div_ceil(seq_len, Br), Batch * num_heads);
   dim3 block(128); // 4/8 warps per block
   // 启动kernel
   if (seq_len > 256) {
@@ -302,7 +305,7 @@ void flash_attn_prefill_impl(const torch::Tensor& Q, const torch::Tensor& K,
         reinterpret_cast<__nv_bfloat16*>(K.data_ptr()),
         reinterpret_cast<__nv_bfloat16*>(V.data_ptr()),
         reinterpret_cast<__nv_bfloat16*>(O.data_ptr()),
-        nh, nh, seq_len, softmax_scale, 0, 0
+        num_heads, num_heads_kv, seq_len, softmax_scale, 0, 0
     );
   } else {
     const int smem_size = (Q_tile_size + K_tile_size * 2 + K_tile_size) * sizeof(__nv_bfloat16) + Br * Bc * sizeof(float);
@@ -313,8 +316,12 @@ void flash_attn_prefill_impl(const torch::Tensor& Q, const torch::Tensor& K,
         reinterpret_cast<__nv_bfloat16*>(K.data_ptr()),
         reinterpret_cast<__nv_bfloat16*>(V.data_ptr()),
         reinterpret_cast<__nv_bfloat16*>(O.data_ptr()),
-        nh, nh, seq_len, softmax_scale, 0, 0
+        num_heads, num_heads_kv, seq_len, softmax_scale, 0, 0
     );
+  }
+  cudaError_t err = cudaGetLastError();
+  if (err != cudaSuccess) {
+    throw std::runtime_error("CUDA error in flash_attn_prefill_impl: " + std::string(cudaGetErrorString(err)));
   }
   
 

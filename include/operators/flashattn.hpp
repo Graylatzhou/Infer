@@ -20,3 +20,5 @@ template class infer::FlashAttnOperator<__nv_bfloat16>;
 void flash_attn_prefill_impl(const torch::Tensor& Q, const torch::Tensor& K, 
                              const torch::Tensor& V, torch::Tensor& O);
 
+std::vector<torch::Tensor> flash_attention_v2_cutlass(torch::Tensor q, torch::Tensor k,
+                                      torch::Tensor v, bool is_causal = false, double softmax_scale=1);
